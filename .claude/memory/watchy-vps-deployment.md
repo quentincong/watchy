@@ -20,8 +20,10 @@ active、18 个任务、DB 迁移到位,Gemini 实测 #16 入场目标提取通�
 
 ## VPS 环境
 
-- IP: ubuntu-4gb-hil-2 (Hetzner)
-- OS: Ubuntu 24.04.4 LTS
+- 服务商: BandwagonHost（2026-08 从 Hetzner 迁移过来，旧的 ubuntu-4gb-hil-2 记录已作废）
+- 主机: `qcvps` → 65.49.218.116（ssh 配置在 WSL `~/.ssh/config`，密钥 `~/.ssh/qcvps`）
+  另有 `qcvps-cf` → fps.cong.fyi，走 cloudflared ProxyCommand
+- OS: Ubuntu 24.04 LTS
 - 用户: watchy
 - Python: 3.11.9 via pyenv (`/home/watchy/.pyenv/versions/3.11.9/`)
 - 虚拟环境: `trading` (pyenv virtualenv 3.11.9 trading)
@@ -29,7 +31,7 @@ active、18 个任务、DB 迁移到位,Gemini 实测 #16 入场目标提取通�
 ## 部署架构
 
 ```
-~/watchy/                          # Git clone of github.com/SConv11/watchy
+~/watchy/                          # Git clone of github.com/quentincong/watchy
     ├── watchy/                    # Python package (pip install -e .)
     ├── config.yaml                # 非敏感配置（可安全提交，通过 GitHub 编辑 watchlist）
     ├── secrets.example.yaml       # 敏感配置模板

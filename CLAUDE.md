@@ -69,7 +69,7 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
 - `git pull` before any session; `git push` at every checkpoint and at session end.
 - Commit at each checkpoint — don't let a finished, tested unit sit uncommitted. Reference the issue
   number(s) in the message (e.g. `Fix #9 concurrency …`).
-- Keep GitHub issues (`SConv11/watchy`) in sync as you go — close fixed ones once tests pass.
+- Keep GitHub issues (`quentincong/watchy`) in sync as you go — close fixed ones once tests pass.
 - Commit the `.claude/` directory (shared config + synced memory under `.claude/memory/`). Do NOT commit
   `.claude/settings.local.json` (machine-local, git-ignored) or any secrets.
 - Work directly on `main`.
@@ -86,7 +86,7 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
 ## Where things live
 
 - Work plan: `docs/IMPLEMENTATION_PLAN.md`. Bugs / decisions / enhancements: GitHub issues
-  (`SConv11/watchy`). Cross-machine knowledge: here, `docs/`, memory (`.claude/memory/`), or issues.
+  (`quentincong/watchy`). Cross-machine knowledge: here, `docs/`, memory (`.claude/memory/`), or issues.
 
 ## Keeping docs in sync (do proactively, without being asked)
 

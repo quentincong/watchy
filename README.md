@@ -1,6 +1,6 @@
 # Watchy
 
-[![tests](https://github.com/SConv11/watchy/actions/workflows/ci.yml/badge.svg)](https://github.com/SConv11/watchy/actions/workflows/ci.yml)
+[![tests](https://github.com/quentincong/watchy/actions/workflows/ci.yml/badge.svg)](https://github.com/quentincong/watchy/actions/workflows/ci.yml)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -206,7 +206,7 @@ refresh:**
 ```bash
 # 1. Clone
 cd ~
-git clone https://github.com/SConv11/watchy.git
+git clone https://github.com/quentincong/watchy.git
 
 # 2. Install (editable, so git pull takes effect without reinstalling)
 ~/.pyenv/versions/3.11.9/envs/trading/bin/pip install -e ~/watchy
