@@ -474,3 +474,161 @@ class TestPostJsonRetry:
             with pytest.raises(http.client.RemoteDisconnected):
                 _post_json("http://x", b"{}", {}, attempts=3)
         assert [c.args[0] for c in sleep.call_args_list] == [2.0, 4.0]
+
+
+class _AdviceSource:
+    """PositionSource stand-in for end-to-end get_advice() tests."""
+
+    def __init__(self, pos=None):
+        self._pos = pos
+
+    def get_position(self, ticker):
+        return self._pos
+
+    def format_position_context(self, ticker):
+        return "1 share @ $220.00"
+
+    def format_portfolio_context(self):
+        return "Total value: $5,835.77"
+
+
+_ADVICE_WITH_TP = (
+    "Ticker: COHR\n"
+    "Decision: HOLD\n"
+    "Urgency: LOW\n"
+    "Target: 260.00\n"
+    "Take-Profit: sell 1 share at 295.00\n"
+    "\n"
+    "A detail paragraph explaining the call."
+)
+
+
+def _advice_config(tp_enabled, ticker="COHR"):
+    from watchy.config import (
+        LLMConfig, TakeProfitConfig, TickerConfig, WatchyConfig,
+    )
+
+    return WatchyConfig(
+        watchlist=[TickerConfig(ticker=ticker)],
+        llm=LLMConfig(provider="gemini", model="gemini-3.5-flash", api_key="k"),
+        take_profit=TakeProfitConfig(enabled=tp_enabled, floor_gain_pct=10.0),
+    )
+
+
+class TestVolunteeredTakeProfitDropped:
+    """A Take-Profit line only counts when the #28 gain-gate armed the zone.
+
+    With no zone armed the model fills the field unprompted anyway, and on a
+    1-share holding "sell 1 share at X" is a FULL EXIT — which notify.py renders
+    under the Take-Profit heading next to a HOLD decision. Observed on COHR in 8
+    of 10 volunteered emissions, 2026-08-31.
+    """
+
+    def test_dropped_when_zone_inactive(self):
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            out = adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False)
+            )
+        assert out["decision"] == "HOLD"
+        assert out["take_profit"] == ""
+
+    def test_kept_when_zone_active(self):
+        import watchy.advisor as adv
+        from watchy.indicators import IndicatorBundle
+
+        pos = _held(15.7)            # NVDA, 3 shares, gain over the 10% floor
+        cfg = _advice_config(tp_enabled=True, ticker="NVDA")
+        bundle = IndicatorBundle(ticker="NVDA", current_price=189.0, avg_atr_20d=5.0)
+        advice = _ADVICE_WITH_TP.replace("Ticker: COHR", "Ticker: NVDA")
+
+        with patch.object(adv, "_call_gemini", return_value=advice):
+            out = adv.get_advice(
+                "NVDA", {}, _AdviceSource(pos), cfg, indicator_bundle=bundle
+            )
+        assert out["take_profit"] == "sell 1 share at 295.00"
+
+    def test_untouched_when_model_wrote_na(self):
+        import watchy.advisor as adv
+
+        na = _ADVICE_WITH_TP.replace("sell 1 share at 295.00", "N/A")
+        with patch.object(adv, "_call_gemini", return_value=na):
+            out = adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False)
+            )
+        assert out["take_profit"] == "N/A"
+
+
+class TestGeminiPerModelPricing:
+    """GEMINICOST must follow llm.model — one hardcoded tier under-reported ~17%."""
+
+    def test_35_flash_tier(self):
+        assert _gemini_cost_usd(1_000_000, 0, 0, "gemini-3.5-flash") == pytest.approx(1.50)
+        assert _gemini_cost_usd(0, 1_000_000, 0, "gemini-3.5-flash") == pytest.approx(9.00)
+
+    def test_37_flash_is_the_cheaper_tier(self):
+        assert _gemini_cost_usd(1_000_000, 0, 0, "gemini-3.7-flash") == pytest.approx(0.75)
+        assert _gemini_cost_usd(0, 1_000_000, 0, "gemini-3.7-flash") == pytest.approx(3.75)
+
+    def test_thinking_bills_at_the_output_rate(self):
+        assert _gemini_cost_usd(0, 0, 1_000_000, "gemini-3.7-flash") == pytest.approx(3.75)
+
+    def test_unknown_model_falls_back_to_35(self):
+        # Older callers pass no model at all and must keep their previous numbers.
+        assert _gemini_cost_usd(1_000_000, 0, 0) == pytest.approx(1.50)
+        assert _gemini_cost_usd(1_000_000, 0, 0, "gemini-9-future") == pytest.approx(1.50)
+
+
+class TestGeminiThinkingLevelsPerModel:
+    """3.7-flash dropped "minimal" — sending it is an HTTP 400 (verified 2026-08-31)."""
+
+    def test_off_still_minimal_on_35(self):
+        assert _gemini_thinking_config("off", "gemini-3.5-flash") == {"thinkingLevel": "minimal"}
+
+    def test_off_falls_back_to_low_on_37(self):
+        assert _gemini_thinking_config("off", "gemini-3.7-flash") == {"thinkingLevel": "low"}
+
+    def test_minimal_clamped_on_37(self):
+        # Asking for minimal explicitly must not produce a 400 either.
+        assert _gemini_thinking_config("minimal", "gemini-3.7-flash") == {"thinkingLevel": "low"}
+
+    def test_supported_levels_pass_through_on_37(self):
+        for lvl in ("low", "medium", "high"):
+            assert _gemini_thinking_config(lvl, "gemini-3.7-flash") == {"thinkingLevel": lvl}
+
+
+class TestPromptGuardrails:
+    """G1 dropped (single-sector book made it a constant); G3 states its reason."""
+
+    def test_sector_lean_guard_is_gone(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "already heavy in this name or sector" not in ADVISOR_PROMPT
+        assert "Avoid over-concentration in any single sector" not in ADVISOR_PROMPT
+
+    def test_portfolio_composition_sentence_kept(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "Consider the user's overall portfolio composition" in ADVISOR_PROMPT
+
+    def test_concentration_math_guard_kept(self):
+        # G2 is what still restrains a trim-for-concentration call.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "CRITICAL — concentration math" in ADVISOR_PROMPT
+
+    def test_odd_lot_guard_gives_the_limit_order_reason(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "ODD-LOT / TINY-POSITION GUARD" in ADVISOR_PROMPT
+        assert "WHOLE-SHARE SELL-LIMIT" in ADVISOR_PROMPT
+        assert "MARKET order" in ADVISOR_PROMPT
+
+    def test_high_priced_share_may_be_market_trimmed(self):
+        # User's call 2026-08-31: a >= $1,000 share may be trimmed fractionally,
+        # accepting that it executes as a market order with no limit price.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "$1,000 per share" in ADVISOR_PROMPT
+        assert "MARKET sell" in ADVISOR_PROMPT

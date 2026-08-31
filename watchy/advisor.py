@@ -15,6 +15,9 @@ import time
 from typing import Any
 
 from watchy.config import LLMConfig, WatchyConfig
+# notify has no watchy imports of its own, so this cannot cycle. Reused rather
+# than duplicated so "actionable Take-Profit" has exactly one definition.
+from watchy.notify import _has_take_profit
 from watchy.positions import PositionSource
 
 logger = logging.getLogger(__name__)
@@ -25,9 +28,6 @@ the final decision, risk assessment, trader plan, and each analyst's summary
 table — plus the user's current position and portfolio overview.
 
 Consider the user's overall portfolio composition when making your decision.
-Avoid over-concentration in any single sector or ticker. If the portfolio is
-already heavy in this name or sector, lean toward trimming or holding rather
-than adding.
 
 CRITICAL — concentration math: judge a position's weight against the TOTAL
 ACCOUNT VALUE (equities PLUS cash and cash-equivalents like money-market/sweep),
@@ -43,14 +43,18 @@ value to compute net worth or a concentration denominator — buying power is a
 leveraged purchasing limit, not money you own. The "Total value" figure is the
 sole denominator; it already includes cash and equivalents.
 
-ODD-LOT / TINY-POSITION GUARD: TRIM means selling PART of a holding, so it only
-makes sense when the REMAINING position is still a sensible size. If the
-position is ALREADY fractional (a non-whole share count), trimming it
-fractionally is fine — no new odd lot is created. But when it is not a sensible
-size but a whole share, do not force a fractional-share sale. For such tiny
-positions choose HOLD, or SELL to exit the entire share when the thesis is
+ODD-LOT / TINY-POSITION GUARD: a partial exit has to be placeable as a
+WHOLE-SHARE SELL-LIMIT order — limit orders require whole shares, and a
+fractional sell executes only as a MARKET order, which forfeits the pre-placed
+limit that catches the intraday high. TRIM therefore only makes sense when the
+REMAINING position is still a sensible whole-share size. If the position is
+ALREADY fractional (a non-whole share count), a fractional MARKET sell is fine
+— no new odd lot is created, and no limit order is given up that could have been
+placed anyway. But for a whole-share position too small to split, do not force a
+fractional sale: choose HOLD, or SELL to exit the entire share when the thesis is
 genuinely bearish — never TRIM. The ONE exception: a single high-priced share
-(roughly ≥ $1,000 per share) may be trimmed fractionally when the analysis
+(roughly ≥ $1,000 per share) may be trimmed fractionally as a MARKET sell — say
+explicitly that it is a market order and give NO limit price — when the analysis
 strongly warrants taking money off the table.
 
 TAKE-PROFIT / DON'T ROUND-TRIP A WINNER: protecting an existing gain matters as
@@ -228,6 +232,17 @@ def get_advice(
             return None
 
         parsed = _parse_advice(result.strip(), ticker)
+        # #28: a Take-Profit line only means something when the mechanical
+        # gain-gate actually armed the zone. With no zone the model fills the
+        # field unprompted, and on a 1-share holding "sell 1 share at X" is a
+        # FULL EXIT that notify.py would render under the Take-Profit heading
+        # next to a HOLD decision. Drop it rather than surface a contradiction.
+        if not take_profit_guidance and _has_take_profit(parsed.get("take_profit")):
+            logger.info(
+                "Advisor for %s: dropped volunteered Take-Profit (zone inactive): %s",
+                ticker, parsed["take_profit"],
+            )
+            parsed["take_profit"] = ""
         logger.info(
             "Advisor for %s: decision=%s urgency=%s",
             ticker, parsed.get("decision"), parsed.get("urgency"),
@@ -439,20 +454,33 @@ _ADVICE_MAX_TOKENS = 1024
 # tokens share maxOutputTokens, so the visible answer needs its own room on top.
 _GEMINI_THINK_HEADROOM = 2048
 
-# gemini-3.5-flash prices, USD per 1M tokens (update from ai.google.dev/pricing).
+# Gemini prices, USD per 1M tokens (ai.google.dev/gemini-api/docs/pricing).
 # Thinking tokens are billed at the output rate. Used only for the greppable
 # GEMINICOST log estimate — the token counts logged are exact.
-# KEEP IN SYNC WITH llm.model — the tiers differ: 3.5-flash is $1.50/$9.00,
-# 3.6-flash $1.50/$7.50. (Held $7.50 while the advisor ran 3.6; restored to
-# $9.00 on 2026-08-13 when it rolled back to 3.5, having silently
-# under-reported GEMINICOST by ~17% in between.)
-_GEMINI_PRICE_IN = 1.50
-_GEMINI_PRICE_OUT = 9.00
+# Keyed by model so the estimate follows llm.model automatically: hardcoding one
+# tier silently under-reported GEMINICOST by ~17% while the advisor ran 3.6.
+# 3.6/3.7-flash are on promotional rates through 2026-12-31 and revert to
+# $1.50/$7.50 on 2027-01-01 — revisit this table then.
+_GEMINI_PRICES: dict[str, tuple[float, float]] = {
+    "gemini-3.5-flash": (1.50, 9.00),
+    "gemini-3.6-flash": (0.75, 3.75),
+    "gemini-3.7-flash": (0.75, 3.75),
+}
+# Unknown/unset model bills at the 3.5-flash tier, the advisor's historical default.
+_GEMINI_PRICE_FALLBACK = (1.50, 9.00)
+_GEMINI_PRICE_IN, _GEMINI_PRICE_OUT = _GEMINI_PRICE_FALLBACK
 
 
-def _gemini_cost_usd(in_tok: int, out_tok: int, think_tok: int) -> float:
-    """Approximate USD for one Gemini call (thinking billed as output)."""
-    return (in_tok * _GEMINI_PRICE_IN + (out_tok + think_tok) * _GEMINI_PRICE_OUT) / 1_000_000
+def _gemini_cost_usd(
+    in_tok: int, out_tok: int, think_tok: int, model: str = ""
+) -> float:
+    """Approximate USD for one Gemini call (thinking billed as output).
+
+    ``model`` picks the price tier; omitted or unrecognised falls back to the
+    3.5-flash rates so older callers keep their previous numbers.
+    """
+    price_in, price_out = _GEMINI_PRICES.get(model, _GEMINI_PRICE_FALLBACK)
+    return (in_tok * price_in + (out_tok + think_tok) * price_out) / 1_000_000
 
 
 def _effective_key(llm: LLMConfig) -> str:
@@ -565,15 +593,35 @@ def _call_openai_compatible(prompt: str, llm: LLMConfig) -> str:
     return data["choices"][0]["message"]["content"]
 
 
-def _gemini_thinking_config(level: str) -> dict:
+# thinkingLevel values each model accepts (ai.google.dev/gemini-api/docs/thinking).
+# gemini-3.7-flash dropped "minimal" — sending it returns HTTP 400 — so "off" has
+# to fall back to the cheapest level that model actually supports.
+_GEMINI_THINKING_LEVELS: dict[str, tuple[str, ...]] = {
+    "gemini-3.7-flash": ("low", "medium", "high"),
+}
+_GEMINI_THINKING_LEVELS_DEFAULT = ("minimal", "low", "medium", "high")
+
+
+def _gemini_thinking_config(level: str, model: str = "") -> dict:
     """Map a thinking level to the gemini-3.x generateContent thinkingConfig.
 
-    gemini-3.6-flash uses ``thinkingLevel`` (minimal/low/medium/high; default
-    medium) and REJECTS the legacy ``thinkingBudget`` with HTTP 400 (verified on
-    3.6, 2026-07-21). Thinking can't be fully switched off, so "off" maps to the
-    cheapest tier, ``minimal`` — which in practice still emits ~0 thinking tokens.
+    gemini-3.x uses ``thinkingLevel`` and REJECTS the legacy ``thinkingBudget``
+    with HTTP 400 (verified on 3.6, 2026-07-21). Thinking can't be fully switched
+    off, so "off" maps to the cheapest level the TARGET MODEL accepts: ``minimal``
+    on 3.5/3.6, but ``low`` on 3.7, which rejects minimal outright (HTTP 400,
+    verified 2026-08-31). An unsupported level warns and clamps rather than
+    letting the call fail.
     """
-    return {"thinkingLevel": "minimal" if level == "off" else level}
+    supported = _GEMINI_THINKING_LEVELS.get(model, _GEMINI_THINKING_LEVELS_DEFAULT)
+    if level == "off":
+        return {"thinkingLevel": supported[0]}
+    if level not in supported:
+        logger.warning(
+            "thinking level %r not supported on %s — using %r",
+            level, model or "<unset model>", supported[0],
+        )
+        return {"thinkingLevel": supported[0]}
+    return {"thinkingLevel": level}
 
 
 def _call_gemini(prompt: str, llm: LLMConfig, ticker: str = "", level: str = "off") -> str:
@@ -594,7 +642,7 @@ def _call_gemini(prompt: str, llm: LLMConfig, ticker: str = "", level: str = "of
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "maxOutputTokens": max_out,
-            "thinkingConfig": _gemini_thinking_config(level),
+            "thinkingConfig": _gemini_thinking_config(level, model),
         },
     }).encode()
 
@@ -611,7 +659,7 @@ def _call_gemini(prompt: str, llm: LLMConfig, ticker: str = "", level: str = "of
         logger.info(
             "GEMINICOST %s model=%s think_level=%s in=%d out=%d think=%d usd=%.5f",
             ticker or "-", model, level, in_tok, out_tok, think_tok,
-            _gemini_cost_usd(in_tok, out_tok, think_tok),
+            _gemini_cost_usd(in_tok, out_tok, think_tok, model),
         )
     except Exception:
         logger.debug("GEMINICOST logging failed", exc_info=True)
