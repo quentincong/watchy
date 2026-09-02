@@ -459,12 +459,13 @@ _GEMINI_THINK_HEADROOM = 2048
 # GEMINICOST log estimate — the token counts logged are exact.
 # Keyed by model so the estimate follows llm.model automatically: hardcoding one
 # tier silently under-reported GEMINICOST by ~17% while the advisor ran 3.6.
-# 3.6/3.7-flash are on promotional rates through 2026-12-31 and revert to
+# 3.6/3.7/3.8-flash are on promotional rates through 2026-12-31 and revert to
 # $1.50/$7.50 on 2027-01-01 — revisit this table then.
 _GEMINI_PRICES: dict[str, tuple[float, float]] = {
     "gemini-3.5-flash": (1.50, 9.00),
     "gemini-3.6-flash": (0.75, 3.75),
     "gemini-3.7-flash": (0.75, 3.75),
+    "gemini-3.8-flash": (0.75, 3.75),
 }
 # Unknown/unset model bills at the 3.5-flash tier, the advisor's historical default.
 _GEMINI_PRICE_FALLBACK = (1.50, 9.00)
@@ -598,6 +599,7 @@ def _call_openai_compatible(prompt: str, llm: LLMConfig) -> str:
 # to fall back to the cheapest level that model actually supports.
 _GEMINI_THINKING_LEVELS: dict[str, tuple[str, ...]] = {
     "gemini-3.7-flash": ("low", "medium", "high"),
+    "gemini-3.8-flash": ("low", "medium", "high"),
 }
 _GEMINI_THINKING_LEVELS_DEFAULT = ("minimal", "low", "medium", "high")
 
@@ -608,9 +610,9 @@ def _gemini_thinking_config(level: str, model: str = "") -> dict:
     gemini-3.x uses ``thinkingLevel`` and REJECTS the legacy ``thinkingBudget``
     with HTTP 400 (verified on 3.6, 2026-07-21). Thinking can't be fully switched
     off, so "off" maps to the cheapest level the TARGET MODEL accepts: ``minimal``
-    on 3.5/3.6, but ``low`` on 3.7, which rejects minimal outright (HTTP 400,
-    verified 2026-08-31). An unsupported level warns and clamps rather than
-    letting the call fail.
+    on 3.5/3.6, but ``low`` on 3.7 and 3.8, which reject minimal outright
+    (HTTP 400, verified 2026-08-31 on 3.7 and 2026-09-02 on 3.8). An
+    unsupported level warns and clamps rather than letting the call fail.
     """
     supported = _GEMINI_THINKING_LEVELS.get(model, _GEMINI_THINKING_LEVELS_DEFAULT)
     if level == "off":

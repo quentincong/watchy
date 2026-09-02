@@ -571,6 +571,10 @@ class TestGeminiPerModelPricing:
         assert _gemini_cost_usd(1_000_000, 0, 0, "gemini-3.7-flash") == pytest.approx(0.75)
         assert _gemini_cost_usd(0, 1_000_000, 0, "gemini-3.7-flash") == pytest.approx(3.75)
 
+    def test_38_flash_shares_the_37_tier(self):
+        assert _gemini_cost_usd(1_000_000, 0, 0, "gemini-3.8-flash") == pytest.approx(0.75)
+        assert _gemini_cost_usd(0, 1_000_000, 0, "gemini-3.8-flash") == pytest.approx(3.75)
+
     def test_thinking_bills_at_the_output_rate(self):
         assert _gemini_cost_usd(0, 0, 1_000_000, "gemini-3.7-flash") == pytest.approx(3.75)
 
@@ -596,6 +600,13 @@ class TestGeminiThinkingLevelsPerModel:
     def test_supported_levels_pass_through_on_37(self):
         for lvl in ("low", "medium", "high"):
             assert _gemini_thinking_config(lvl, "gemini-3.7-flash") == {"thinkingLevel": lvl}
+
+    def test_38_behaves_like_37(self):
+        # 3.8-flash rejects minimal the same way (HTTP 400, verified 2026-09-02).
+        assert _gemini_thinking_config("off", "gemini-3.8-flash") == {"thinkingLevel": "low"}
+        assert _gemini_thinking_config("minimal", "gemini-3.8-flash") == {"thinkingLevel": "low"}
+        for lvl in ("low", "medium", "high"):
+            assert _gemini_thinking_config(lvl, "gemini-3.8-flash") == {"thinkingLevel": lvl}
 
 
 class TestPromptGuardrails:
