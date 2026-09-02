@@ -174,3 +174,28 @@ class TestTieredCadence:
         from watchy.tier2 import _effective_tier2_days
         cfg = self._cfg(tier2_days=["Monday", " TUE ", "wed"])
         assert _effective_tier2_days(cfg.watchlist[0], cfg) == {0, 1, 2}
+
+
+class TestAdviceLogWiring:
+    """#31: Tier 2 hands the advisor a store and its source label."""
+
+    def test_passes_store_and_source(self):
+        from watchy.config import TickerConfig, WatchyConfig
+        from watchy.indicators import IndicatorBundle
+        from watchy.tier2 import _PlanEntry, _run_ticker
+
+        bundle = IndicatorBundle(ticker="NVDA", current_price=189.0, avg_atr_20d=5.0)
+        entry = _PlanEntry(
+            ticker="NVDA", tc=TickerConfig(ticker="NVDA"), bundle=bundle,
+            state={}, held=True, price=189.0, avg_atr=5.0, target=None, skip=False,
+        )
+        config = WatchyConfig(watchlist=[TickerConfig(ticker="NVDA")])
+        store, notifier = MagicMock(), MagicMock()
+        store.start_run.return_value = 1
+
+        with patch("watchy.tier2.run_pipeline", return_value={"summary": "ok"}), \
+             patch("watchy.tier2.get_advice", return_value=None) as adv:
+            _run_ticker(entry, config, store, notifier, MagicMock())
+
+        assert adv.call_args.kwargs["store"] is store
+        assert adv.call_args.kwargs["source"] == "tier2"

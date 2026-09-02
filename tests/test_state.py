@@ -200,3 +200,103 @@ class TestTier1RunCount:
         store._conn.commit()
         store.start_run("NVDA", "tier1")  # today
         assert store.count_tier1_runs_today("NVDA") == 1
+
+
+class TestAdviceLog:
+    """#31: every advisor decision is recorded with the book state behind it."""
+
+    def test_round_trip(self, store):
+        store.log_advice(
+            "NVDA",
+            source="tier2",
+            model="gemini-3.5-flash",
+            thinking_level="low",
+            decision="ADD",
+            urgency="LOW",
+            target="200.00 - 210.00",
+            take_profit="",
+            price=189.0,
+            quantity=3.0,
+            average_cost=163.33,
+            gain_pct=15.7,
+            zone_armed=False,
+        )
+        rows = store.get_advice_log()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["ticker"] == "NVDA"
+        assert row["source"] == "tier2"
+        assert row["model"] == "gemini-3.5-flash"
+        assert row["thinking_level"] == "low"
+        assert row["decision"] == "ADD"
+        assert row["urgency"] == "LOW"
+        assert row["price"] == 189.0
+        assert row["quantity"] == 3.0
+        assert row["average_cost"] == 163.33
+        assert row["gain_pct"] == 15.7
+        assert row["zone_armed"] == 0
+        assert row["advised_ts"]
+
+    def test_flat_position_logs_nulls_not_zeros(self, store):
+        # A ticker with no holding must be distinguishable from a zeroed one:
+        # forward-return scoring treats "not held" and "held 0 shares" alike
+        # only if NULL survives the write.
+        store.log_advice("AMD", decision="BUY", price=140.0)
+        row = store.get_advice_log()[0]
+        assert row["quantity"] is None
+        assert row["average_cost"] is None
+        assert row["gain_pct"] is None
+
+    def test_zone_armed_stored_as_int(self, store):
+        store.log_advice("NVDA", decision="TRIM", zone_armed=True)
+        assert store.get_advice_log()[0]["zone_armed"] == 1
+
+    def test_ticker_filter_is_case_insensitive(self, store):
+        store.log_advice("NVDA", decision="HOLD")
+        store.log_advice("AMD", decision="BUY")
+        rows = store.get_advice_log(ticker="nvda")
+        assert [r["ticker"] for r in rows] == ["NVDA"]
+
+    def test_since_ts_filter(self, store):
+        store._conn.execute(
+            "INSERT INTO advice_log (advised_ts, ticker, decision) "
+            "VALUES ('2000-01-01T12:00:00+00:00', 'NVDA', 'HOLD')"
+        )
+        store._conn.commit()
+        store.log_advice("NVDA", decision="ADD")
+        rows = store.get_advice_log(since_ts="2020-01-01T00:00:00+00:00")
+        assert [r["decision"] for r in rows] == ["ADD"]
+
+    def test_ordered_oldest_first(self, store):
+        # The consumer walks decisions forward in time against later prices.
+        store._conn.execute(
+            "INSERT INTO advice_log (advised_ts, ticker, decision) "
+            "VALUES ('2000-01-01T12:00:00+00:00', 'NVDA', 'OLD')"
+        )
+        store._conn.commit()
+        store.log_advice("NVDA", decision="NEW")
+        assert [r["decision"] for r in store.get_advice_log()] == ["OLD", "NEW"]
+
+    def test_table_is_created_on_a_preexisting_db(self):
+        # The live VPS state.db predates this table. It's a brand-new table, so
+        # CREATE TABLE IF NOT EXISTS covers it with no ALTER migration — but
+        # only if reopening an existing file actually re-runs the schema.
+        import os
+        import tempfile
+
+        from watchy.state import StateStore
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        try:
+            first = StateStore(path)
+            first._conn.execute("DROP TABLE advice_log")
+            first._conn.commit()
+            first.close()
+
+            reopened = StateStore(path)
+            reopened.log_advice("NVDA", decision="HOLD")
+            assert len(reopened.get_advice_log()) == 1
+            reopened.close()
+        finally:
+            os.unlink(path)

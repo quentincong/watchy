@@ -174,6 +174,54 @@ def _take_profit_guidance(
     ) + "\n"
 
 
+def _log_advice(
+    store: Any,
+    ticker: str,
+    source: str,
+    llm: LLMConfig,
+    thinking_level: str,
+    parsed: dict[str, str],
+    position_source: PositionSource,
+    indicator_bundle: Any,
+    zone_armed: bool,
+) -> None:
+    """Write one advice_log row (#31); never raise into the advisor path.
+
+    Instrumentation must not be able to lose an advice card that was paid for
+    and is on its way to Telegram, so every failure here is swallowed with a
+    warning. ``store`` is optional: a caller with no state store (scripts, the
+    A/B harness) just doesn't log.
+    """
+    if store is None:
+        return
+    try:
+        from watchy import take_profit as tpmod
+
+        try:
+            pos = position_source.get_position(ticker)
+        except Exception:  # noqa: BLE001
+            pos = None
+        # Same anchor the take-profit limit uses, so a logged price and a logged
+        # gain can never come from two different feeds (see tpmod.anchor_price).
+        store.log_advice(
+            ticker,
+            source=source,
+            model=llm.model or "",
+            thinking_level=thinking_level,
+            decision=parsed.get("decision", ""),
+            urgency=parsed.get("urgency", ""),
+            target=parsed.get("target", ""),
+            take_profit=parsed.get("take_profit", ""),
+            price=tpmod.anchor_price(pos, indicator_bundle),
+            quantity=pos.quantity if pos is not None else None,
+            average_cost=pos.average_cost if pos is not None else None,
+            gain_pct=tpmod.position_gain_pct(pos),
+            zone_armed=zone_armed,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("Advice log write failed for %s", ticker, exc_info=True)
+
+
 def get_advice(
     ticker: str,
     analysis_result: dict[str, Any],
@@ -182,6 +230,8 @@ def get_advice(
     thinking_level: str = "off",
     *,
     indicator_bundle: Any = None,
+    store: Any = None,
+    source: str = "",
 ) -> dict[str, str] | None:
     """Synthesize position-aware advice from analysis + portfolio.
 
@@ -193,6 +243,10 @@ def get_advice(
     take-profit gate (#28): when take_profit is enabled and the held position's
     unrealized gain has crossed the floor, an explicit take-profit directive is
     injected into the prompt so the advisor proposes a whole-share sell-limit.
+
+    ``store`` + ``source`` (optional) record the decision to the advice log
+    (#31) for later forward-return scoring; ``source`` names the caller
+    (tier1 / tier2 / take_profit_zone). Logging never affects the return value.
 
     Returns a dict with keys: ticker, decision, urgency, target, take_profit,
     detail. Returns None if no LLM key is configured or the call fails.
@@ -246,6 +300,13 @@ def get_advice(
         logger.info(
             "Advisor for %s: decision=%s urgency=%s",
             ticker, parsed.get("decision"), parsed.get("urgency"),
+        )
+        # #31: persist the decision with the book state behind it. Every call
+        # site reaches the advisor through here, so this is the one place that
+        # can't be forgotten when a new trigger is added.
+        _log_advice(
+            store, ticker, source, llm, thinking_level, parsed,
+            position_source, indicator_bundle, bool(take_profit_guidance),
         )
         return parsed
     except Exception:

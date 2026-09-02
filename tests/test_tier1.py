@@ -265,3 +265,35 @@ class TestTakeProfitRearmOnFill:
         )
         adv.assert_not_called()
         assert store.save_ticker_state.call_args.kwargs["prev_quantity"] == 0.0
+
+
+class TestAdviceLogWiring:
+    """#31: both Tier 1 advisor call sites label themselves distinctly.
+
+    The zone-entry re-advise is a different decision context from a signal-driven
+    pipeline run, and forward-return scoring has to be able to separate them.
+    """
+
+    def test_pipeline_run_labels_itself_tier1(self):
+        config = _config(max_tier1_pipelines_per_day=2)
+        store, notifier = MagicMock(), MagicMock()
+        store.get_ticker_state.return_value = {}
+        store.is_in_cooldown.return_value = False
+        store.start_run.return_value = 1
+        store.count_tier1_runs_today.return_value = 0
+        with patch("watchy.tier1.compute_indicators", return_value=_bundle(210.0)), \
+             patch("watchy.tier1.detect_signals", return_value=["rsi_oversold"]), \
+             patch("watchy.tier1.run_pipeline", return_value={"summary": "ok"}), \
+             patch("watchy.tier1.get_advice", return_value={}) as adv, \
+             patch("watchy.tier1.get_position_source"), \
+             patch("watchy.tier1.monitor_schwab"):
+            scan_ticker("AAPL", config, store, notifier)
+
+        assert adv.call_args.kwargs["store"] is store
+        assert adv.call_args.kwargs["source"] == "tier1"
+
+    def test_zone_entry_labels_itself_take_profit_zone(self):
+        zone = TestTakeProfitZone()
+        store, notifier, adv = zone._scan(zone._config(), prev_zone=None, gain=15.7)
+        assert adv.call_args.kwargs["store"] is store
+        assert adv.call_args.kwargs["source"] == "take_profit_zone"

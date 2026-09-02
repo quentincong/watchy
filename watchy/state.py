@@ -86,12 +86,37 @@ class StateStore:
                 updated_ts TEXT
             );
 
+            -- Every advisor decision, with the book state that produced it, so
+            -- decisions can be scored against forward returns later (#31). Four
+            -- model evaluations have now been decided on proxies because nothing
+            -- records what was advised, at what price, on what holding. Another
+            -- brand-new table, so CREATE IF NOT EXISTS covers the live VPS db.
+            CREATE TABLE IF NOT EXISTS advice_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                advised_ts TEXT NOT NULL,               -- ISO UTC, decision time
+                ticker TEXT NOT NULL,
+                source TEXT,                            -- tier1 / tier2 / take_profit_zone
+                model TEXT,                             -- llm.model at call time
+                thinking_level TEXT,                    -- effort at call time
+                decision TEXT,                          -- BUY/ADD/HOLD/TRIM/SELL
+                urgency TEXT,                           -- LOW/MEDIUM/HIGH
+                target TEXT,                            -- raw Target field
+                take_profit TEXT,                       -- post-gate Take-Profit field
+                price REAL,                             -- mark the decision was made at
+                quantity REAL,                          -- shares held (NULL = flat)
+                average_cost REAL,
+                gain_pct REAL,                          -- unrealized % at decision time
+                zone_armed INTEGER                      -- was #28 guidance injected
+            );
+
             CREATE INDEX IF NOT EXISTS idx_signal_log_ticker
                 ON signal_log(ticker, signal_type);
             CREATE INDEX IF NOT EXISTS idx_signal_log_fired
                 ON signal_log(fired_ts);
             CREATE INDEX IF NOT EXISTS idx_run_history_ticker
                 ON run_history(ticker, started_ts);
+            CREATE INDEX IF NOT EXISTS idx_advice_log_ticker
+                ON advice_log(ticker, advised_ts);
         """)
         self._conn.commit()
 
@@ -230,6 +255,85 @@ class StateStore:
                 (_now_iso(), int(success), summary, run_id),
             )
             self._conn.commit()
+
+    # --- advice log (#31) ---
+
+    def log_advice(
+        self,
+        ticker: str,
+        *,
+        source: str = "",
+        model: str = "",
+        thinking_level: str = "",
+        decision: str = "",
+        urgency: str = "",
+        target: str = "",
+        take_profit: str = "",
+        price: float | None = None,
+        quantity: float | None = None,
+        average_cost: float | None = None,
+        gain_pct: float | None = None,
+        zone_armed: bool = False,
+    ) -> None:
+        """Record one advisor decision with the book state that produced it.
+
+        The row is the unit a forward-return score is computed over later, so it
+        carries the *inputs* to the decision (price, shares, cost basis, gain,
+        whether the take-profit zone was armed) alongside the decision itself —
+        a decision can't be scored without knowing what it was made against.
+        ``model`` and ``thinking_level`` are recorded per row so a later model
+        switch splits the history cleanly instead of contaminating it.
+        """
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO advice_log ("
+                "advised_ts, ticker, source, model, thinking_level, decision, "
+                "urgency, target, take_profit, price, quantity, average_cost, "
+                "gain_pct, zone_armed"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _now_iso(),
+                    ticker.upper(),
+                    source,
+                    model,
+                    thinking_level,
+                    decision,
+                    urgency,
+                    target,
+                    take_profit,
+                    price,
+                    quantity,
+                    average_cost,
+                    gain_pct,
+                    int(zone_armed),
+                ),
+            )
+            self._conn.commit()
+
+    def get_advice_log(
+        self, ticker: str | None = None, since_ts: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Read advice rows oldest-first, optionally filtered by ticker / start.
+
+        Oldest-first because the consumer is a forward-return scorer walking
+        decisions forward in time.
+        """
+        sql = "SELECT * FROM advice_log"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if ticker:
+            clauses.append("ticker = ?")
+            params.append(ticker.upper())
+        if since_ts:
+            clauses.append("advised_ts >= ?")
+            params.append(since_ts)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY advised_ts ASC, id ASC"
+        with self._lock:
+            cur = self._conn.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     # --- generic key/value ---
 

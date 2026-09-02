@@ -165,6 +165,7 @@ def _handle_signal(
             ticker, result, position_source, config,
             thinking_level=config.llm.gemini_thinking_tier1,
             indicator_bundle=bundle,
+            store=store, source="tier1",
         )
 
         notifier.pipeline_result(
@@ -301,6 +302,7 @@ def _fire_take_profit(
             ticker, analysis_result, position_source, config,
             thinking_level=config.llm.gemini_thinking_tier1,
             indicator_bundle=bundle,
+            store=store, source="take_profit_zone",
         )
         position_text = position_source.format_position_context(ticker)
         notifier.take_profit_alert(ticker, gain_pct, advice, position_text)

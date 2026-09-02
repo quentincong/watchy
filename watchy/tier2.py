@@ -257,6 +257,7 @@ def _run_ticker(
                 ticker, result, position_source, config,
                 thinking_level=config.llm.gemini_thinking_tier2,
                 indicator_bundle=bundle,
+                store=store, source="tier2",
             )
 
             # An advisor failure is not fatal to the run (the analysis itself is

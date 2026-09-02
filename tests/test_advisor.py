@@ -643,3 +643,156 @@ class TestPromptGuardrails:
 
         assert "$1,000 per share" in ADVISOR_PROMPT
         assert "MARKET sell" in ADVISOR_PROMPT
+
+
+class _RecordingStore:
+    """StateStore stand-in capturing log_advice kwargs."""
+
+    def __init__(self, boom=False):
+        self.rows = []
+        self._boom = boom
+
+    def log_advice(self, ticker, **kwargs):
+        if self._boom:
+            raise RuntimeError("disk full")
+        self.rows.append({"ticker": ticker, **kwargs})
+
+
+class TestAdviceLogging:
+    """#31: record what was advised, at what price, on what holding.
+
+    Four model evaluations have been decided on proxies because nothing
+    persisted the decisions. This is the row a forward-return score reads.
+    """
+
+    def test_logs_the_decision_and_the_book_state(self):
+        import watchy.advisor as adv
+        from watchy.indicators import IndicatorBundle
+
+        store = _RecordingStore()
+        pos = _held(15.7)                     # NVDA, 3 shares @ 163.33, mark 189
+        cfg = _advice_config(tp_enabled=False, ticker="NVDA")
+        bundle = IndicatorBundle(ticker="NVDA", current_price=185.0, avg_atr_20d=5.0)
+        advice = _ADVICE_WITH_TP.replace("Ticker: COHR", "Ticker: NVDA")
+
+        with patch.object(adv, "_call_gemini", return_value=advice):
+            adv.get_advice(
+                "NVDA", {}, _AdviceSource(pos), cfg,
+                thinking_level="low", indicator_bundle=bundle,
+                store=store, source="tier2",
+            )
+
+        assert len(store.rows) == 1
+        row = store.rows[0]
+        assert row["ticker"] == "NVDA"
+        assert row["source"] == "tier2"
+        assert row["decision"] == "HOLD"
+        assert row["urgency"] == "LOW"
+        assert row["target"] == "260.00"
+        assert row["quantity"] == 3
+        assert row["average_cost"] == 163.33
+        assert row["gain_pct"] == 15.7
+
+    def test_price_anchors_on_the_broker_mark_not_the_bundle(self):
+        # Same rule the take-profit limit follows: a logged price and a logged
+        # gain must come from one feed, or the pair can't be scored later.
+        import watchy.advisor as adv
+        from watchy.indicators import IndicatorBundle
+
+        store = _RecordingStore()
+        pos = _held(15.7)                                  # current_price 189.0
+        bundle = IndicatorBundle(ticker="NVDA", current_price=185.0)
+        advice = _ADVICE_WITH_TP.replace("Ticker: COHR", "Ticker: NVDA")
+
+        with patch.object(adv, "_call_gemini", return_value=advice):
+            adv.get_advice(
+                "NVDA", {}, _AdviceSource(pos),
+                _advice_config(tp_enabled=False, ticker="NVDA"),
+                indicator_bundle=bundle, store=store, source="tier1",
+            )
+        assert store.rows[0]["price"] == 189.0
+
+    def test_records_model_and_effort_for_attribution(self):
+        # A later model switch has to split the history, not contaminate it.
+        import watchy.advisor as adv
+
+        store = _RecordingStore()
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False),
+                thinking_level="low", store=store, source="tier2",
+            )
+        assert store.rows[0]["model"] == "gemini-3.5-flash"
+        assert store.rows[0]["thinking_level"] == "low"
+
+    def test_logs_the_gated_take_profit_not_the_volunteered_one(self):
+        # The dropped-TP gate runs first, so the log matches what was sent.
+        import watchy.advisor as adv
+
+        store = _RecordingStore()
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False),
+                store=store, source="tier2",
+            )
+        assert store.rows[0]["take_profit"] == ""
+        assert store.rows[0]["zone_armed"] is False
+
+    def test_zone_armed_when_guidance_injected(self):
+        import watchy.advisor as adv
+        from watchy.indicators import IndicatorBundle
+
+        store = _RecordingStore()
+        pos = _held(15.7)
+        cfg = _advice_config(tp_enabled=True, ticker="NVDA")
+        bundle = IndicatorBundle(ticker="NVDA", current_price=189.0, avg_atr_20d=5.0)
+        advice = _ADVICE_WITH_TP.replace("Ticker: COHR", "Ticker: NVDA")
+
+        with patch.object(adv, "_call_gemini", return_value=advice):
+            adv.get_advice(
+                "NVDA", {}, _AdviceSource(pos), cfg,
+                indicator_bundle=bundle, store=store, source="take_profit_zone",
+            )
+        assert store.rows[0]["zone_armed"] is True
+        assert store.rows[0]["take_profit"] == "sell 1 share at 295.00"
+
+    def test_no_store_is_not_an_error(self):
+        # Scripts and the A/B harness call get_advice with no state store.
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            out = adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False)
+            )
+        assert out["decision"] == "HOLD"
+
+    def test_log_failure_never_loses_the_advice(self, caplog):
+        # The advice card is already paid for and on its way to Telegram.
+        # Instrumentation must not be able to take it down.
+        import watchy.advisor as adv
+
+        store = _RecordingStore(boom=True)
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            out = adv.get_advice(
+                "COHR", {}, _AdviceSource(), _advice_config(tp_enabled=False),
+                store=store, source="tier2",
+            )
+        assert out["decision"] == "HOLD"
+        assert "Advice log write failed" in caplog.text
+
+    def test_position_lookup_failure_still_logs_the_decision(self):
+        # A broker hiccup must degrade the row, not skip it.
+        import watchy.advisor as adv
+
+        class _Broken(_AdviceSource):
+            def get_position(self, ticker):
+                raise RuntimeError("schwab 500")
+
+        store = _RecordingStore()
+        with patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP):
+            adv.get_advice(
+                "COHR", {}, _Broken(), _advice_config(tp_enabled=False),
+                store=store, source="tier2",
+            )
+        assert store.rows[0]["decision"] == "HOLD"
+        assert store.rows[0]["quantity"] is None
