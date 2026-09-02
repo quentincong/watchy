@@ -15,11 +15,13 @@ same way production does. The one field the .md can't restore is the graph's sho
 block); it's left empty. Everything else matches the live advisor input, so the
 decision should now track live Tier 2 at the same model + thinking level.
 
-gemini-3.6-flash controls thinking with ``thinkingConfig.thinkingLevel``
-(minimal / low / medium / high; default medium) and REJECTS the legacy
-``thinkingBudget`` with HTTP 400. The "off" cell therefore maps to minimal (the
-cheapest tier; observed ~0 thinking tokens). maxOutputTokens is set generously so
-thinking can't truncate the answer. Each level runs in its own try/except so an
+gemini-3.x controls thinking with ``thinkingConfig.thinkingLevel`` and REJECTS
+the legacy ``thinkingBudget`` with HTTP 400. The level table is model-dependent
+— 3.5/3.6 take minimal|low|medium|high, while 3.7 and 3.8 take low|medium|high
+and 400 on minimal — so the "off" cell is resolved by the advisor's own
+``_gemini_thinking_config`` rather than mirrored here, which is what kept this
+script honest when 3.7 landed. maxOutputTokens is set generously so thinking
+can't truncate the answer. Each level runs in its own try/except so an
 unsupported field on one cell doesn't abort the sweep.
 
 MANUAL / needs the Gemini api_key in secrets.yaml. Run with the `trading` pyenv.
@@ -27,7 +29,7 @@ MANUAL / needs the Gemini api_key in secrets.yaml. Run with the `trading` pyenv.
     python scripts/compare_gemini_thinking.py --ticker MOD
     python scripts/compare_gemini_thinking.py --ticker MOD --levels off,low,medium,high
 
-Pass ``--model gemini-3.6-flash`` to pin the model regardless of the config/secrets
+Pass ``--model gemini-3.8-flash`` to pin the model regardless of the config/secrets
 default (the repo default reverted to gemini-3.5-flash on 2026-07-22).
 """
 
@@ -50,7 +52,9 @@ from watchy.advisor import (
     _effective_key,
     _format_analysis,
     _gemini_cost_usd,
+    _gemini_thinking_config,
     _parse_advice,
+    _take_profit_guidance,
 )
 from watchy.config import load_config
 from watchy.positions import get_position_source
@@ -123,24 +127,15 @@ def result_from_report(sec: dict[str, str]) -> dict:
     }
 
 
-def _thinking_config(level: str) -> dict:
-    """Map a level label to the generateContent thinkingConfig for gemini-3.x.
-
-    Mirrors advisor._gemini_thinking_config: 3.6 rejects the legacy
-    ``thinkingBudget`` (HTTP 400), so "off" maps to the cheapest tier, minimal.
-    """
-    return {"thinkingLevel": "minimal" if level == "off" else level}  # minimal/low/medium/high
-
-
 def call_gemini(prompt: str, llm, level: str, model: str = "") -> tuple[str, dict]:
-    model = model or llm.model or "gemini-3.6-flash"
+    model = model or llm.model or "gemini-3.5-flash"
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/{model}"
            f":generateContent?key={_effective_key(llm)}")
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "maxOutputTokens": _ADVICE_MAX_TOKENS + _THINK_HEADROOM,
-            "thinkingConfig": _thinking_config(level),
+            "thinkingConfig": _gemini_thinking_config(level, model),
         },
     }).encode()
     req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
@@ -162,7 +157,7 @@ def main() -> int:
     ap.add_argument("--levels", default="off,low,medium,high",
                     help="comma-separated: off, minimal, low, medium, high")
     ap.add_argument("--model", default="",
-                    help="force the Gemini model (e.g. gemini-3.6-flash), "
+                    help="force the Gemini model (e.g. gemini-3.8-flash), "
                          "independent of the config/secrets default")
     args = ap.parse_args()
 
@@ -188,15 +183,20 @@ def main() -> int:
         print(f"advisor provider is {config.llm.provider!r}, not gemini", file=sys.stderr)
         return 2
     llm = config.llm
-    active_model = args.model or llm.model or "gemini-3.6-flash"
+    active_model = args.model or llm.model or "gemini-3.5-flash"
     logger.info("Gemini model under test: %s", active_model)
     ps = get_position_source(config)
 
+    analysis_text = _format_analysis(result)
+    # #28: the take-profit directive is part of the prompt under test. No
+    # indicator bundle offline, so the limit anchors on the position's own mark
+    # and the ATR runway is omitted — the gate itself still arms off live gain.
     prompt = ADVISOR_PROMPT.format(
         ticker=ticker,
-        analysis=_format_analysis(result),
+        analysis=analysis_text,
         position=ps.format_position_context(ticker) or "No position held.",
         portfolio=ps.format_portfolio_context() or "Portfolio data unavailable.",
+        take_profit_guidance=_take_profit_guidance(ticker, analysis_text, ps, config, None),
     )
 
     levels = [x.strip() for x in args.levels.split(",") if x.strip()]
@@ -212,7 +212,7 @@ def main() -> int:
         in_tok = int(usage.get("promptTokenCount", 0))
         out_tok = int(usage.get("candidatesTokenCount", 0))
         think_tok = int(usage.get("thoughtsTokenCount", 0))
-        usd = _gemini_cost_usd(in_tok, out_tok, think_tok)
+        usd = _gemini_cost_usd(in_tok, out_tok, think_tok, active_model)
         parsed = _parse_advice((text or "").strip(), ticker)
         outputs[level] = text
         rows.append((level, in_tok, out_tok, think_tok, usd, parsed.get("decision"), parsed.get("urgency")))
