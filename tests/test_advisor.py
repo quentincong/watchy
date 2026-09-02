@@ -796,3 +796,95 @@ class TestAdviceLogging:
             )
         assert store.rows[0]["decision"] == "HOLD"
         assert store.rows[0]["quantity"] is None
+
+
+class TestUrgencyRubric:
+    """Urgency had NO definition — three bare labels, so the model fell back on
+    a generic "how alarming is this" prior, and alarm tracks selling.
+
+    Measured over 166 incumbent calls (2026-09-02 A/B): ADD 78% LOW, TRIM 92%
+    MEDIUM, HOLD 100% LOW, and HIGH emitted once in 328 calls across every arm.
+    The user filters out LOW, so the bias arrived through the urgency field
+    rather than the decision field and hid most accumulation advice.
+    """
+
+    def test_urgency_is_defined_as_time(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "how soon the user must act, and nothing else" in ADVISOR_PROMPT
+
+    def test_states_that_low_cards_are_discarded_unread(self):
+        # The model has no other way to know LOW is a discard bin, which is
+        # what made LOW a safe-looking default for accumulation advice.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "DISCARDS LOW ones unread" in ADVISOR_PROMPT
+
+    def test_urgency_is_explicitly_decision_neutral(self):
+        # The whole defect: sell-side actions scored more urgent than buy-side
+        # ones at equal timing. Symmetry has to be stated, not implied.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "DIRECTION of the decision must not affect it" in ADVISOR_PROMPT
+        assert "entry window closing in two days" in ADVISOR_PROMPT
+
+    def test_all_three_levels_are_reachable(self):
+        # HIGH was unreachable in practice (1/328). Each level needs a concrete
+        # trigger or the scale keeps operating as two.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "HIGH   — act today" in ADVISOR_PROMPT
+        assert "MEDIUM — act this week" in ADVISOR_PROMPT
+        assert "LOW    — nothing to decide" in ADVISOR_PROMPT
+
+    def test_receding_level_can_lift_a_card_out_of_low(self):
+        # Reachability lives in the detail paragraph, which is only read when
+        # the card clears the urgency filter. So an unlikely-to-fill level must
+        # be able to raise urgency, or the reachability sentence is invisible.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "receding fast enough that" in ADVISOR_PROMPT
+
+    def test_urgency_is_not_conviction(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "Do NOT use urgency for conviction or position size" in ADVISOR_PROMPT
+
+    def test_a_hold_may_be_high(self):
+        # Guards the reading that urgency is a property of the decision's
+        # direction rather than of its timing.
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "A HOLD can be HIGH when a level is about to be hit" in ADVISOR_PROMPT
+
+
+class TestReachabilityInDetail:
+    """Fill risk gets a required sentence in the detail paragraph (user's call
+    2026-09-02: no sixth parsed field — Target parse is at 98% and tail format
+    is what degrades first on a model refresh)."""
+
+    def test_detail_must_state_whether_the_level_is_reached(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "likely to TRADE at the level you named" in ADVISOR_PROMPT
+
+    def test_detail_must_say_what_to_do_when_it_would_not_fill(self):
+        from watchy.advisor import ADVISOR_PROMPT
+
+        assert "never fill" in ADVISOR_PROMPT
+        assert "chase above a stated price, or drop the idea" in ADVISOR_PROMPT
+
+    def test_no_new_parsed_field_was_added(self):
+        # Deliberate: the response contract is unchanged, so the parser and the
+        # Telegram card keep working and no new tail field can go missing.
+        from watchy.advisor import _parse_advice
+
+        parsed = _parse_advice(
+            "Ticker: NVDA\nDecision: ADD\nUrgency: HIGH\nTarget: 210.00\n"
+            "Take-Profit: N/A\n\nDetail.",
+            "NVDA",
+        )
+        assert set(parsed) == {
+            "ticker", "decision", "urgency", "target", "take_profit", "detail",
+        }
+        assert parsed["urgency"] == "HIGH"

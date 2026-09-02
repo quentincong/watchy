@@ -86,7 +86,26 @@ Respond in this exact format:
 
 Ticker: {ticker}
 Decision: <BUY / SELL / TRIM / ADD / HOLD>
-Urgency: <HIGH / MEDIUM / LOW>
+Urgency: <HIGH / MEDIUM / LOW — how soon the user must act, and nothing else.
+
+The user reads MEDIUM and HIGH cards and DISCARDS LOW ones unread, so LOW means
+"nothing here to decide this week" — never park a call there that you would want
+seen. Judge timing only: the DIRECTION of the decision must not affect it. An
+entry window closing in two days and an exit window closing in two days are both
+HIGH. Measure the gap between the current price and the level you name in Target
+(or the take-profit level) in daily ATRs, and account for which way price is
+travelling relative to it.
+
+  HIGH   — act today: price is at or inside the level now, a dated catalyst
+           lands within 2 sessions, or the level is receding fast enough that
+           waiting means missing it altogether.
+  MEDIUM — act this week: roughly 1–3 daily ATRs from the level, or the thesis
+           turns on a confirmation that could arrive within days.
+  LOW    — nothing to decide: a resting order would do its job unattended and
+           no judgement is needed before next week.
+
+Do NOT use urgency for conviction or position size — the Decision and the detail
+paragraph carry those. A HOLD can be HIGH when a level is about to be hit.>
 Target: <the entry / accumulation price level — where one would BUY or ADD to a
 position — as a number like 215.50 (a range like 215-230 is fine). This is NOT a
 stop-loss and NOT a take-profit; it's the level to watch for getting in. Write
@@ -105,6 +124,9 @@ Then write a detailed paragraph (5-8 sentences) covering:
     whole share is too large for the suggested allocation (i.e. one share costs
     more than the dollar amount you'd allocate); otherwise size in whole shares.
   - The 2-3 key reasons from the analysis that support this decision
+  - Whether price is actually likely to TRADE at the level you named. Say it
+    plainly, and when a limit order resting there would probably never fill,
+    say what to do instead — chase above a stated price, or drop the idea.
   - The primary risk(s) that could invalidate this recommendation
   - Any conditions the user should watch for (e.g. "if it breaks below X, exit")
 
