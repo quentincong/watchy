@@ -1,2 +1,6 @@
+# The repo is LF everywhere: it deploys to a Linux VPS (CRLF breaks shebangs and
+# systemd units) and is edited from both WSL Claude Code and Windows/PowerShell Codex.
+# Normalize every text file to LF on commit and checkout, whatever the editor writes.
+* text=auto eol=lf
 # Shell scripts must stay LF so they run on the Linux VPS (CRLF breaks the shebang).
 *.sh text eol=lf

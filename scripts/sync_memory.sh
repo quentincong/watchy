@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Mirror Claude Code's per-machine memory dir into the repo so it travels via git
-# (the ~/.claude memory store is per-machine, keyed by the project's absolute path,
-# and does NOT sync across machines on its own).
+# PAUSED 2026-09-10: this script's sole purpose was GitHub memory sync. Claude Code
+# and Codex now use the same local memory directory, so no hook should invoke it.
+# Keep this historical script dormant unless a new safe cross-machine design replaces it.
+exit 0
+# Retired implementation: mirror Claude Code's per-machine memory dir into the repo
+# so it could travel via Git. The native ~/.claude memory store was per-machine and
+# keyed by the project's absolute path.
 #
-# Registered as a SessionEnd hook. The memory source path is machine-specific, so
-# the hook lives in .claude/settings.local.json (git-ignored, per-machine) and
-# passes the source dir as $1, e.g.:
+# This used to be registered as a SessionEnd hook in the machine-local
+# .claude/settings.local.json and received the source directory as $1, e.g.:
 #   bash scripts/sync_memory.sh "C:/Users/qc/.claude/projects/C--Users-qc-watchy/memory"
 #
-# Other machine: add the same SessionEnd hook to ITS settings.local.json with ITS
-# own memory path. See .claude/memory/watchy-memory-sync.md.
+# Do not restore that hook unchanged. See .claude/memory/watchy-memory-sync.md.
 set -uo pipefail
 
 SRC="${1:-}"

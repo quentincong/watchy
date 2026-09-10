@@ -1,15 +1,30 @@
-# Watchy — Project Instructions for Claude
+# Watchy — Shared Project Instructions for Claude Code and Codex
 
 Watchy is a stock-monitoring daemon built on top of TradingAgents.
 Tier 1 = hourly technical signal scanner (no LLM). Tier 2 = scheduled daily LLM pipeline.
 
 ## How this file works
 
-Keep CLAUDE.md lean — it loads into context every session. Durable ground truth
-(conventions, workflow, architecture) lives here; dated status, ops detail, and
-investigations live in `.claude/memory/*.md` (recalled on demand, committed to the repo
-and synced across machines — see memory `watchy-memory-sync`). When a status block grows,
-move the detail to a memory file and leave a one-line pointer here.
+`CLAUDE.md` is the authoritative project rule set shared by Claude Code and Codex.
+Claude Code loads it directly. Codex loads `AGENTS.md`, which tells Codex to read this
+file in full before doing any work. Keep this file lean: durable conventions, workflow,
+and architecture live here; dated status, ops detail, and investigations live in
+`.claude/memory/*.md` and are recalled on demand. When a status block grows, move the
+detail to a memory file and leave a one-line pointer here.
+
+## Shared memory discipline
+
+- Claude Code and Codex use `.claude/memory/` as the single shared project-memory
+  directory. Read `.claude/memory/MEMORY.md` at the start of development and open the
+  relevant topic files before changing code.
+- After every completed development step or checkpoint, update the relevant memory topic;
+  update `MEMORY.md` when a topic is added or its index summary materially changes.
+- Every memory entry written or updated by Codex must include this exact provenance
+  sentence: **“这一些开发内容是codex在powershell里做的。”** Include it every time Codex
+  records development work in memory.
+- The old `scripts/sync_memory.sh` automation existed only to copy memory into the GitHub
+  repository. That GitHub-sync function is suspended: do not run the script or restore
+  its SessionEnd hook. See memory `watchy-memory-sync` for the local shared-directory setup.
 
 ## Current status (2026-06-15)
 
@@ -70,7 +85,7 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
 - Commit at each checkpoint — don't let a finished, tested unit sit uncommitted. Reference the issue
   number(s) in the message (e.g. `Fix #9 concurrency …`).
 - Keep GitHub issues (`quentincong/watchy`) in sync as you go — close fixed ones once tests pass.
-- Commit the `.claude/` directory (shared config + synced memory under `.claude/memory/`). Do NOT commit
+- Commit the `.claude/` directory (shared config + shared memory under `.claude/memory/`). Do NOT commit
   `.claude/settings.local.json` (machine-local, git-ignored) or any secrets.
 - Work directly on `main`.
 - **If a pull/merge shows CONFLICTS: STOP and ask the human. Never auto-resolve.**
@@ -78,6 +93,8 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
 ## Conventions
 
 - Add dependencies to **both** `requirements.txt` and `pyproject.toml`.
+- Line endings are **LF**, enforced by `.gitattributes` (`* text=auto eol=lf`). Windows/PowerShell editors
+  write CRLF — never commit a whole-file line-ending rewrite; `git diff --ignore-cr-at-eol` shows the real change.
 - The live VPS `state.db` (`~/watchy/state.db`): schema changes need an `ALTER TABLE` migration, not just
   `CREATE TABLE IF NOT EXISTS`.
 - Run `pytest` as the gate after each change/phase (pre-authorized — no need to ask). `tests/test_e2e.py`

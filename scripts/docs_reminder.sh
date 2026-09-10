@@ -6,6 +6,10 @@
 # committed — path-agnostic so both machines inherit it).
 set -uo pipefail
 
+# Not every Claude Code build honors the settings.json `if: Bash(git commit*)` filter
+# (WSL fires this after every Bash call), so check the hook payload ourselves.
+printf '%s' "$(cat)" | grep -q 'git commit' || exit 0
+
 files="$(git show --name-only --format= HEAD 2>/dev/null)" || exit 0
 code="$(printf '%s\n' "$files" | grep -E '^watchy/.*\.py$|^config\.yaml$' || true)"
 docs="$(printf '%s\n' "$files" | grep -E '^README|^CLAUDE\.md$|^docs/' || true)"

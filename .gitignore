@@ -9,6 +9,8 @@ dist/
 *.log.*
 .env
 secrets.yaml
+.claude/settings.local.json
+.codex/hooks.json
 .venv/
 venv/
 reports/
