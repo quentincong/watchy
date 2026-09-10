@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -43,19 +44,18 @@ value to compute net worth or a concentration denominator — buying power is a
 leveraged purchasing limit, not money you own. The "Total value" figure is the
 sole denominator; it already includes cash and equivalents.
 
-ODD-LOT / TINY-POSITION GUARD: a partial exit has to be placeable as a
-WHOLE-SHARE SELL-LIMIT order — limit orders require whole shares, and a
-fractional sell executes only as a MARKET order, which forfeits the pre-placed
-limit that catches the intraday high. TRIM therefore only makes sense when the
-REMAINING position is still a sensible whole-share size. If the position is
-ALREADY fractional (a non-whole share count), a fractional MARKET sell is fine
-— no new odd lot is created, and no limit order is given up that could have been
-placed anyway. But for a whole-share position too small to split, do not force a
-fractional sale: choose HOLD, or SELL to exit the entire share when the thesis is
-genuinely bearish — never TRIM. The ONE exception: a single high-priced share
-(roughly ≥ $1,000 per share) may be trimmed fractionally as a MARKET sell — say
-explicitly that it is a market order and give NO limit price — when the analysis
-strongly warrants taking money off the table.
+ODD-LOT / TINY-POSITION GUARD: use this exact arithmetic for an existing
+position. If it contains 2 or more whole shares, TRIM may sell any whole-share
+count from 1 through quantity-1, leaving at least 1 whole share. If it contains
+exactly 1 ordinary-priced whole share, TRIM is forbidden: choose HOLD, or SELL
+the entire share when the thesis is genuinely bearish. If the existing position
+is already fractional (a non-whole share count), a partial fractional MARKET
+sell is allowed. The ONE exception for a whole-share position is a single
+high-priced share (roughly ≥ $1,000 per share), which may be trimmed
+fractionally as a MARKET sell when the analysis strongly warrants taking money
+off the table. Any fractional sell forfeits the pre-placed sell-limit that
+catches an intraday high, so say explicitly that it is a MARKET order and give
+NO limit price.
 
 TAKE-PROFIT / DON'T ROUND-TRIP A WINNER: protecting an existing gain matters as
 much as finding an entry. When the position is IN PROFIT AND the analysis shows
@@ -86,26 +86,7 @@ Respond in this exact format:
 
 Ticker: {ticker}
 Decision: <BUY / SELL / TRIM / ADD / HOLD>
-Urgency: <HIGH / MEDIUM / LOW — how soon the user must act, and nothing else.
-
-The user reads MEDIUM and HIGH cards and DISCARDS LOW ones unread, so LOW means
-"nothing here to decide this week" — never park a call there that you would want
-seen. Judge timing only: the DIRECTION of the decision must not affect it. An
-entry window closing in two days and an exit window closing in two days are both
-HIGH. Measure the gap between the current price and the level you name in Target
-(or the take-profit level) in daily ATRs, and account for which way price is
-travelling relative to it.
-
-  HIGH   — act today: price is at or inside the level now, a dated catalyst
-           lands within 2 sessions, or the level is receding fast enough that
-           waiting means missing it altogether.
-  MEDIUM — act this week: roughly 1–3 daily ATRs from the level, or the thesis
-           turns on a confirmation that could arrive within days.
-  LOW    — nothing to decide: a resting order would do its job unattended and
-           no judgement is needed before next week.
-
-Do NOT use urgency for conviction or position size — the Decision and the detail
-paragraph carry those. A HOLD can be HIGH when a level is about to be hit.>
+Urgency: <HIGH / MEDIUM / LOW>
 Target: <the entry / accumulation price level — where one would BUY or ADD to a
 position — as a number like 215.50 (a range like 215-230 is fine). This is NOT a
 stop-loss and NOT a take-profit; it's the level to watch for getting in. Write
@@ -116,6 +97,21 @@ high — plus the WHOLE-share count to sell there, e.g. "sell 1 share at 192.50"
 Write N/A when not taking profit (no meaningful gain, or holding the full position
 with real upside left). Only meaningful for a held winner; see any TAKE-PROFIT
 ZONE directive above.>
+
+Urgency means only how soon the user must place or change an order for the
+Decision above. Do NOT use it for conviction, downside magnitude, position size,
+or how noteworthy the analysis is. Apply these rules exactly:
+
+  HIGH   — an order must be placed or changed today.
+  MEDIUM — an order or portfolio decision is required within five sessions.
+  LOW    — no order needs to change this week.
+
+HOLD is always LOW. If action is required today or within five sessions, the
+Decision must be BUY, ADD, TRIM, or SELL rather than HOLD. For BUY or ADD, timing
+may use the entry level in Target. For TRIM or SELL, use the exit level stated in
+the detail paragraph or an armed Take-Profit level; never use the entry-only
+Target to time a sale. The DIRECTION of an actionable decision must not affect
+its urgency: an entry order due today and an exit order due today are both HIGH.
 
 Then write a detailed paragraph (5-8 sentences) covering:
   - Specific entry/exit price target or range, referencing levels from the analysis
@@ -377,7 +373,21 @@ def _parse_advice(raw: str, fallback_ticker: str) -> dict[str, str]:
             parsed["decision"] = stripped.split(":", 1)[1].strip().upper()
             got["decision"] = True
         elif not got["urgency"] and low.startswith("urgency:"):
-            parsed["urgency"] = stripped.split(":", 1)[1].strip().upper()
+            raw_urgency = stripped.split(":", 1)[1].strip()
+            match = re.match(r"^(HIGH|MEDIUM|LOW)\b", raw_urgency, re.IGNORECASE)
+            if match:
+                parsed["urgency"] = match.group(1).upper()
+                if raw_urgency.upper() != parsed["urgency"]:
+                    logger.warning(
+                        "Advisor urgency normalized for %s: %r -> %s",
+                        fallback_ticker, raw_urgency, parsed["urgency"],
+                    )
+            else:
+                parsed["urgency"] = "LOW"
+                logger.warning(
+                    "Invalid advisor urgency for %s: %r; defaulting to LOW",
+                    fallback_ticker, raw_urgency,
+                )
             got["urgency"] = True
         elif not got["take_profit"] and low.startswith("take-profit:"):
             # #28 sell-limit + whole-share count. Captured as a header so it
@@ -392,6 +402,13 @@ def _parse_advice(raw: str, fallback_ticker: str) -> dict[str, str]:
         elif stripped:
             detail_lines.append(stripped)
 
+    if parsed["decision"] == "HOLD" and parsed["urgency"] not in ("", "LOW"):
+        logger.warning(
+            "Advisor urgency normalized for %s: HOLD/%s -> HOLD/LOW",
+            fallback_ticker, parsed["urgency"],
+        )
+        parsed["urgency"] = "LOW"
+
     parsed["detail"] = " ".join(detail_lines)
     return parsed
 
@@ -403,8 +420,6 @@ def parse_price(text: str | None) -> float | None:
     returns None for ``N/A`` / empty / no-number strings. A range averages the
     first two numbers; a single value is returned as-is.
     """
-    import re
-
     if not text:
         return None
     nums = re.findall(r"\d+(?:\.\d+)?", text.replace(",", ""))

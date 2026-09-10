@@ -100,6 +100,21 @@ user, not the issue's original mechanical-trailing-stop plan):
 - **Deferred:** hybrid full-pipeline handoff on fire; extracting a first-class resistance level (the
   regex extractor is best-effort). Superset of #17 candidate A (sell-side); distinct from #26 (buy-side).
 
+## 2026-09-10 — Advisor urgency correction + DeepSeek V4.1 migration
+
+- Advisor `Urgency` is now strictly an order deadline: HIGH=today, MEDIUM=within five sessions,
+  LOW=no order change this week. HOLD is always LOW; actionable timing requires an actionable Decision.
+- Entry-only `Target` may time BUY/ADD but never SELL/TRIM. Exit timing uses an exit level in the detail
+  or the armed `Take-Profit` level. The parser normalizes leading enum text and safely defaults unknown
+  urgency values to LOW with a warning.
+- Odd-lot behavior is arithmetic rather than subjective: an integer position of at least two shares may
+  trim 1..quantity-1 whole shares; one ordinary-priced whole share cannot TRIM; existing fractional and
+  single ≥$1,000 positions may use an explicitly labelled fractional market trim.
+- TradingAgents defaults both reasoning roles to canonical `deepseek-flash`. DeepSeek retired V4 Flash
+  immediately and announced that V4 Pro will route to V4.1 Flash on 2026-09-14, so the old two-model
+  split cannot persist. The API request shape and default high thinking mode remain compatible; only the
+  model IDs, cost tables, and dated Pro-alias routing needed code changes.
+
 ## Resolved design decisions (context)
 - **#13** crossover → `== 0` / `== 1` (not `not prev`, which false-fires on a ticker's first scan).
 - **#14** Tier 2 → ordinary trading days simplified risk, **first trading day of the week** full

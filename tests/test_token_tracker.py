@@ -7,6 +7,9 @@ from watchy.token_tracker import (
     _PRICES_FLAT,
     _PRICES_OFFPEAK,
     _PRICES_PEAK,
+    _PRICES_V41_OFFPEAK,
+    _PRICES_V41_PEAK,
+    _PRICES_V41_ROUTED_OFFPEAK,
     TokenCostTracker,
     _cost_usd,
     _extract_usage,
@@ -30,8 +33,13 @@ def _resp(model, input_tok, output_tok, cache_read=0, reasoning=0):
 
 
 class TestPriceTier:
-    def test_pro_detected(self):
-        assert _price_tier("deepseek-v4-pro") == "pro"
+    def test_pro_detected_before_routing_cutover(self):
+        before = datetime(2026, 9, 14, 3, 59, tzinfo=timezone.utc)
+        assert _price_tier("deepseek-v4-pro", before) == "pro"
+
+    def test_pro_alias_becomes_flash_at_routing_cutover(self):
+        after = datetime(2026, 9, 14, 4, 0, tzinfo=timezone.utc)
+        assert _price_tier("deepseek-v4-pro", after) == "flash"
 
     def test_flash_default(self):
         assert _price_tier("deepseek-v4-flash") == "flash"
@@ -75,22 +83,55 @@ class TestPricingWindow:
                 datetime(2026, 8, 17, hour, 0, tzinfo=timezone.utc)
             ) is _PRICES_OFFPEAK
 
+    def test_v41_flash_prices_start_at_announced_cutover(self):
+        before = datetime(2026, 9, 10, 3, 59, tzinfo=timezone.utc)
+        after = datetime(2026, 9, 10, 4, 0, tzinfo=timezone.utc)
+        assert _prices_at(before) is _PRICES_PEAK
+        assert _prices_at(after) is _PRICES_V41_OFFPEAK
+        assert _prices_at(after)["flash"] == {
+            "in": 0.15, "cache": 0.003, "out": 0.60,
+        }
+
+    def test_v41_peak_is_double_offpeak(self):
+        peak = datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc)
+        assert _prices_at(peak) is _PRICES_V41_PEAK
+        for key in ("in", "cache", "out"):
+            assert _PRICES_V41_PEAK["flash"][key] == 2 * _PRICES_V41_OFFPEAK["flash"][key]
+
+    def test_weekend_is_always_offpeak(self):
+        saturday_peak_hour = datetime(2026, 9, 12, 6, 30, tzinfo=timezone.utc)
+        assert _prices_at(saturday_peak_hour) is _PRICES_V41_OFFPEAK
+
+    def test_pro_table_matches_flash_after_routing_cutover(self):
+        after = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        assert _prices_at(after) is _PRICES_V41_ROUTED_OFFPEAK
+        assert _prices_at(after)["pro"] == _prices_at(after)["flash"]
+
 
 class TestCost:
     def test_flash_cost_math(self):
-        p = _prices_at()["flash"]
+        now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+        p = _prices_at(now)["flash"]
         expected = p["in"] + p["out"]  # 1M miss input + 1M output, no cache
-        assert abs(_cost_usd("flash", 1_000_000, 0, 1_000_000) - expected) < 1e-9
+        assert abs(_cost_usd("flash", 1_000_000, 0, 1_000_000, now) - expected) < 1e-9
 
     def test_cache_hit_is_cheaper(self):
-        full = _cost_usd("flash", 1_000_000, 0, 0)
-        cached = _cost_usd("flash", 1_000_000, 1_000_000, 0)
+        now = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+        full = _cost_usd("flash", 1_000_000, 0, 0, now)
+        cached = _cost_usd("flash", 1_000_000, 1_000_000, 0, now)
         assert cached < full
-        assert abs(cached - _prices_at()["flash"]["cache"]) < 1e-9
+        assert abs(cached - _prices_at(now)["flash"]["cache"]) < 1e-9
 
-    def test_pro_dearer_than_flash(self):
-        assert _cost_usd("pro", 1_000_000, 0, 1_000_000) > _cost_usd(
-            "flash", 1_000_000, 0, 1_000_000
+    def test_pro_dearer_than_flash_before_routing_cutover(self):
+        before = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+        assert _cost_usd("pro", 1_000_000, 0, 1_000_000, before) > _cost_usd(
+            "flash", 1_000_000, 0, 1_000_000, before
+        )
+
+    def test_pro_alias_uses_flash_price_after_routing_cutover(self):
+        after = datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)
+        assert _cost_usd("deepseek-v4-pro", 1_000_000, 0, 1_000_000, after) == _cost_usd(
+            "deepseek-flash", 1_000_000, 0, 1_000_000, after
         )
 
 
@@ -135,22 +176,20 @@ class TestTrackerAttribution:
 
     def test_attributes_by_model_and_node(self):
         t = TokenCostTracker()
-        self._run(t, "r1", "deepseek-v4-flash", "Market Analyst", 1000, 200)
-        self._run(t, "r2", "deepseek-v4-pro", "Research Manager", 500, 300)
+        self._run(t, "r1", "deepseek-flash", "Market Analyst", 1000, 200)
+        self._run(t, "r2", "deepseek-flash", "Research Manager", 500, 300)
 
         assert t.by_node["Market Analyst"].calls == 1
         assert t.by_node["Research Manager"].input == 500
-        assert t.by_model["flash"].output == 200
-        assert t.by_model["pro"].output == 300
-        # pro call should dominate cost despite fewer tokens
-        assert t.by_model["pro"].usd > 0
-        assert abs(t.total_usd() - (t.by_model["pro"].usd + t.by_model["flash"].usd)) < 1e-12
+        assert t.by_model["flash"].output == 500
+        assert t.by_model["flash"].usd > 0
+        assert t.total_usd() == t.by_model["flash"].usd
 
     def test_reasoning_attributed_and_reported(self):
         t = TokenCostTracker()
-        self._run(t, "r1", "deepseek-v4-pro", "Portfolio Manager", 500, 300, reasoning=210)
+        self._run(t, "r1", "deepseek-flash", "Portfolio Manager", 500, 300, reasoning=210)
         assert t.by_node["Portfolio Manager"].reasoning == 210
-        assert t.by_model["pro"].reasoning == 210
+        assert t.by_model["flash"].reasoning == 210
         # reasoning surfaces in the greppable dict (a subset of "out")
         d = t.by_node["Portfolio Manager"].as_dict()
         assert d["reason"] == 210 and d["out"] == 300

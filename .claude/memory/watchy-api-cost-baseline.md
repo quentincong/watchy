@@ -1,6 +1,6 @@
 ---
 name: watchy-api-cost-baseline
-description: Watchy 每日 LLM API 成本基线与模型配置（DeepSeek V4 + Gemini），CNY/USD 分开记
+description: Watchy 每日 LLM API 成本基线与模型配置（DeepSeek V4/V4.1 + Gemini），CNY/USD 分开记
 metadata: 
   node_type: memory
   type: project
@@ -14,12 +14,32 @@ metadata:
 
 ## 当前模型配置
 - **Tier 2（TradingAgents pipeline，`watchy/pipeline_runner.py`）**：provider=DeepSeek
-  - deep_think_llm = `deepseek-v4-pro`（Research Manager / PM）
-  - quick_think_llm = `deepseek-v4-flash`（analysts / debaters / trader）
+  - deep_think_llm = `deepseek-flash`（Research Manager / PM）
+  - quick_think_llm = `deepseek-flash`（analysts / debaters / trader）
   - 调度：**每日 `10:02 UTC`**（美国交易日；周末+NYSE 假日跳过）——见下方涨价节
 - **Advisor（持仓建议合成，`watchy/advisor.py`）**：provider=Gemini，model=**`gemini-3.5-flash`**
   （曾于 2026-07 升到 3.6-flash，**2026-08 前用户体感不佳已回退 3.5**，见 [[watchy-model-selection-eval]]）
   - thinking 档位：**Tier1 与 Tier2 均 `low`**（Tier1 原为 `off`，2026-08-13 上调，理由见下）
+
+## 🆕 DeepSeek V4.1 Flash（2026-09-10）
+
+- 官方新 canonical model id 是 **`deepseek-flash`**；旧 `deepseek-v4-flash` 已退役、只暂时转发。
+- V4.1 Flash 是新 Causal Encoder–Decoder 架构（552B MoE，输入激活 8B、输出 16B），不是 7/31
+  那种原架构重训。官方称性能/速度/成本均超 V4 Pro。
+- **2026-09-14 04:00 UTC 起，所有 `deepseek-v4-pro` 也会被服务端转发到 V4.1 Flash 并按 Flash
+  计费，直到 V4.1 Pro 上线。**所以 Watchy 已把 deep/quick 两个默认都改成 canonical
+  `deepseek-flash`；继续保留 Pro 字符串只会让日志和模型身份产生错觉。
+- API 仍是现有 OpenAI-compatible Chat Completions。thinking 参数没变：默认 enabled/high；Watchy 不传
+  显式 effort，现状无需迁移。开源模型的 prompt encoding 有变化，但 hosted API 服务端负责模板，Watchy
+  不应自己编码。
+- 新价（USD/1M，miss/hit/out）：非高峰 **$0.15/$0.003/$0.60**，高峰
+  **$0.30/$0.006/$1.20**，2026-09-10 04:00 UTC 生效。`token_tracker` 已加该切点、周末全日
+  非高峰，并把 9/14 后残留的 Pro alias 归到 Flash 价/桶。旧 V4 表保留供历史时刻计算。
+- Advisor **不换 DeepSeek**：官方新 benchmark 主要证明通用/agent 能力，没有 Watchy 用来否决 advisor
+  候选的 AA-Omniscience 幻觉率或 LCR/格式遵循证据；advisor 继续独立 Gemini 3.5 Flash low。
+- V4 的 ¥7.9/交易日、Pro 37%、Tier1=Tier2 79% 都是旧架构基线，部署后必须重新积累，不能直接外推。
+
+这一些开发内容是codex在powershell里做的。
 
 ## 🚨 DeepSeek 分时计价上线（2026-08-16 16:00 UTC = 北京 08-17 00:00）
 

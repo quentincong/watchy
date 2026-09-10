@@ -26,12 +26,15 @@ DEFAULT_REPORTS_DIR = os.path.expanduser("~/watchy/reports")
 def create_tradingagents_runner(
     *,
     llm_provider: str = "deepseek",
-    deep_think_llm: str = "deepseek-v4-pro",
-    quick_think_llm: str = "deepseek-v4-flash",
+    deep_think_llm: str = "deepseek-flash",
+    quick_think_llm: str = "deepseek-flash",
     backend_url: str | None = None,
     **extra_config: Any,
 ):
     """Factory that returns a ``PipelineRunner`` wired to real TradingAgents.
+
+    DeepSeek V4.1 Flash is the default for both roles. DeepSeek retired the old
+    Flash model and is routing V4 Pro to V4.1 Flash while V4.1 Pro is pending.
 
     Args:
         llm_provider: One of openai, google, anthropic, deepseek, etc.

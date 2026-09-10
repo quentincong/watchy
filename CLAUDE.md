@@ -30,11 +30,11 @@ detail to a memory file and leave a one-line pointer here.
 
 Backlog #1–#18 essentially done; system deployed on the VPS and validated. Detail in memory:
 
-- **Cost / per-component TOKENCOST** → memory `watchy-api-cost-baseline`. `pro` (deep_think) ≈30% of cost
-  in just 2–3 calls; top nodes = Portfolio Manager + Market Analyst. Current run-rate (15 tickers, tiered
-  pricing, measured 2026-08-21 off the DeepSeek usage CSV): **¥7.9/trading day ≈ ¥165/month ≈ ¥2.0k/year**.
-  The 2026-07-31 V4-Flash retrain cost **+23% on the actual bill** (flash +35%, pro flat) — the "+40%"
-  figure elsewhere is the token-side per-ticker number, not the billed one.
+- **Cost / per-component TOKENCOST** → memory `watchy-api-cost-baseline`. The 2026-08-21 V4 baseline was
+  **¥7.9/trading day ≈ ¥165/month ≈ ¥2.0k/year**, with Pro ≈37% despite only RM/PM using it. DeepSeek
+  released V4.1 Flash on 2026-09-10 with lower pricing and will route V4 Pro to it on 2026-09-14; Watchy
+  now uses canonical `deepseek-flash` for every TradingAgents node. Remeasure before quoting the old
+  per-node and run-rate ratios.
 - **Tier 2 8% proximity gate (#15/#16)** → memory `watchy-pending-enable-tier2-gate`. Enabled globally;
   self-bootstraps off `derived_target_price`. Held tickers & the weekly full-risk day never gated; Tier 1
   never gated. Note the gate only bites watch-only names — with 13/18 tickers held it saves little.
@@ -59,6 +59,9 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
   **US trading days only** (weekends AND NYSE holidays skipped — there is no weekend run). The full 3-way
   risk debate rides the **first trading session of each week** (normally Monday, shifting to Tuesday on a
   holiday — `market_calendar.is_weekly_full_risk_day`); other days run 4 analysts with simplified risk.
+- TradingAgents uses DeepSeek V4.1 Flash (`deepseek-flash`) for both the deep (RM/PM) and quick roles.
+  V4.1 keeps the OpenAI-compatible Chat Completions shape and default high thinking effort; no manual
+  prompt-template or thinking-parameter migration is required. The Gemini advisor remains separate.
 - **Why 10:02 UTC**: DeepSeek's peak/off-peak billing goes live **2026-08-16 16:00 UTC** — peak = 01:00–04:00
   & 06:00–10:00 UTC (Beijing 09:00–12:00 & 14:00–18:00) at **2× the off-peak rate**. 10:02 is the earliest
   start that clears it, with two minutes of deliberate margin because DeepSeek does not document whether

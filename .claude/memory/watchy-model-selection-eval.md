@@ -10,6 +10,53 @@ metadata:
 
 # Watchy LLM 选型 & 评测方法（讨论中，2026-08-02）
 
+## 2026-09-10：Urgency / reachability 提示词上线复盘 → 确认过度矫正
+
+9/2 的提示词改动把 `Urgency` 定义为行动时限，并直接告诉模型：用户会读 MEDIUM/HIGH、把 LOW
+丢掉不看；同时允许 `HOLD` 为 HIGH、要求按 `Target`/止盈位距离和价格方向判断。9/10 从 VPS
+`advice_log` 检查 9/3–9/10 共 **77** 条生产结果：只有 **10 LOW**，66 条合法 MEDIUM/HIGH，另有
+1 条格式污染；`HOLD` 共 48 条，其中 **38 条（79%）被升到 MEDIUM/HIGH**。对比改动前 A/B 的
+104 个 incumbent HOLD **100% LOW**，以及全部 328 次仅出现 1 个 HIGH，这不是温和校准而是反向过冲。
+
+已确认的三个提示词缺陷：
+
+1. `DISCARDS LOW ones unread` / `never park a call there that you would want seen` 把本应客观的时间分类
+   变成“争取曝光”的通知路由；模型有动机把几乎所有值得一提的内容升档。
+2. `A HOLD can be HIGH` 与可自由解释的 `receding fast enough` 让无动作卡也能紧急。生产已有 7 个
+   `HOLD+HIGH`；VRT 甚至出现 `HOLD+HIGH+Target:N/A`。同日另一条 VRT 上游是 SELL/Underweight、
+   明确要求减到不超过半仓，advisor 却给 `HOLD+HIGH`，把“要立即关注”和“不要动作”拼在一起。
+3. Urgency 要求依赖 `Target`，但 `Target` 的既有契约只允许**入场/加仓价**。TRIM/SELL/HOLD 没有通用
+   的行动价字段，模型会随机拿报告里的 downside objective / support / future re-entry level 来计时；
+   例如 VRT 的 PM downside `Price Target: 242` 被 advisor 写成 `Target: 242` 后又给 HOLD+HIGH。
+
+另有一个确定的格式 bug：VST 一次输出把字段写成
+`MEDIUM — HOW SOON THE USER MUST ACT, AND NOTHING ELSE.`，因为说明文字被塞在
+`Urgency: <HIGH / MEDIUM / LOW — ...>` 同一占位符内；parser 不校验枚举，整串原样入库，Telegram
+也匹配不到图标。
+
+结论：异常来自提示词设计，不是 VPS、provider 或模型漂移；生产 advisor 仍是
+`gemini-3.5-flash` + Tier1/Tier2 `low`。已按用户批准的方案修正：删除用户读卡行为提示，规定
+`HOLD` 永远 LOW，HIGH=今天要改订单、MEDIUM=五个交易日内要决策、LOW=本周无需改订单；BUY/ADD
+只用 entry `Target` 计时，TRIM/SELL 只用 detail 的 exit level 或 armed Take-Profit。输出模板恢复纯枚举，
+parser 提取开头合法枚举、异常值回退 LOW 并 warning，且代码层强制 HOLD/LOW。odd-lot 也从“sensible”
+改成精确股数算术。按用户要求不做部署前 live A/B / replay。
+
+这一些开发内容是codex在powershell里做的。
+
+## 2026-09-10：DeepSeek V4.1 Flash → pipeline 被迫合流，advisor 不换
+
+- 新 canonical id=`deepseek-flash`；旧 Flash 已退役。官方又宣布 9/14 04:00 UTC 起 Pro alias 也转到
+  V4.1 Flash，直到 V4.1 Pro，所以“RM/PM=Pro、其它=Flash”的二模型架构客观上不能继续。
+- Watchy 两个 pipeline role 直接统一为 canonical `deepseek-flash`，避免服务端已经是 Flash、日志却写
+  Pro 的假象。旧 Pro-vs-Flash 降本 A/B 待办到此失效；以后重开要等真正的 V4.1 Pro。
+- 不把 advisor 切到 V4.1：发布页只有通用/agent benchmark 和官方综合结论，没有 AA-Omniscience
+  幻觉率、AA-LCR、IFBench 这类能迁移到“严格按报告生成价位卡片”的证据。即便综合能力超旧 Pro，
+  也没有推翻 advisor 留 Gemini 3.5 Flash 的核心校准判据。
+- hosted API 兼容，无需手改 prompt encoding；thinking 仍默认 high。必须改的是 canonical model id 与
+  TOKENCOST 的 9/10 新价、9/14 Pro alias 路由切点。
+
+这一些开发内容是codex在powershell里做的。
+
 ## 2026-08-14：GPT-5.6 评估 → **不换，比 DeepSeek 那次还干脆**
 
 **AA-Omniscience Index 两个家族完全不重叠**：Gemini 最差档（3.5F-minimal, **1**）> GPT-5.6 最好档

@@ -162,6 +162,29 @@ detail"""
         parsed = _parse_advice(raw, "NVDA")
         assert parsed["take_profit"] == ""
 
+    def test_normalizes_urgency_with_trailing_explanation(self, caplog):
+        raw = (
+            "Ticker: VST\nDecision: ADD\n"
+            "Urgency: MEDIUM — HOW SOON THE USER MUST ACT\n\nAct this week."
+        )
+        parsed = _parse_advice(raw, "VST")
+        assert parsed["urgency"] == "MEDIUM"
+        assert "urgency normalized" in caplog.text
+
+    def test_invalid_urgency_falls_back_to_low(self, caplog):
+        parsed = _parse_advice(
+            "Ticker: VST\nDecision: ADD\nUrgency: SOMEDAY\n\nWait.", "VST"
+        )
+        assert parsed["urgency"] == "LOW"
+        assert "Invalid advisor urgency" in caplog.text
+
+    def test_hold_urgency_is_forced_low(self, caplog):
+        parsed = _parse_advice(
+            "Ticker: VRT\nDecision: HOLD\nUrgency: HIGH\n\nNo order.", "VRT"
+        )
+        assert parsed["urgency"] == "LOW"
+        assert "HOLD/HIGH -> HOLD/LOW" in caplog.text
+
 
 class TestAnalystSummaryTail:
     def test_returns_table_plus_trailing_conclusion(self):
@@ -633,7 +656,9 @@ class TestPromptGuardrails:
         from watchy.advisor import ADVISOR_PROMPT
 
         assert "ODD-LOT / TINY-POSITION GUARD" in ADVISOR_PROMPT
-        assert "WHOLE-SHARE SELL-LIMIT" in ADVISOR_PROMPT
+        assert "2 or more whole shares" in ADVISOR_PROMPT
+        assert "1 through quantity-1" in ADVISOR_PROMPT
+        assert "exactly 1 ordinary-priced whole share, TRIM is forbidden" in ADVISOR_PROMPT
         assert "MARKET order" in ADVISOR_PROMPT
 
     def test_high_priced_share_may_be_market_trimmed(self):
@@ -799,63 +824,50 @@ class TestAdviceLogging:
 
 
 class TestUrgencyRubric:
-    """Urgency had NO definition — three bare labels, so the model fell back on
-    a generic "how alarming is this" prior, and alarm tracks selling.
+    """Urgency is an order deadline, with HOLD reserved for no-action cards."""
 
-    Measured over 166 incumbent calls (2026-09-02 A/B): ADD 78% LOW, TRIM 92%
-    MEDIUM, HOLD 100% LOW, and HIGH emitted once in 328 calls across every arm.
-    The user filters out LOW, so the bias arrived through the urgency field
-    rather than the decision field and hid most accumulation advice.
-    """
-
-    def test_urgency_is_defined_as_time(self):
+    def test_output_field_is_a_clean_enum(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "how soon the user must act, and nothing else" in ADVISOR_PROMPT
+        assert "Urgency: <HIGH / MEDIUM / LOW>" in ADVISOR_PROMPT
+        assert "Urgency: <HIGH / MEDIUM / LOW —" not in ADVISOR_PROMPT
 
-    def test_states_that_low_cards_are_discarded_unread(self):
-        # The model has no other way to know LOW is a discard bin, which is
-        # what made LOW a safe-looking default for accumulation advice.
+    def test_does_not_tell_model_about_notification_routing(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "DISCARDS LOW ones unread" in ADVISOR_PROMPT
+        assert "DISCARDS LOW ones unread" not in ADVISOR_PROMPT
+        assert "never park a call there that you would want seen" not in ADVISOR_PROMPT
 
     def test_urgency_is_explicitly_decision_neutral(self):
-        # The whole defect: sell-side actions scored more urgent than buy-side
-        # ones at equal timing. Symmetry has to be stated, not implied.
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "DIRECTION of the decision must not affect it" in ADVISOR_PROMPT
-        assert "entry window closing in two days" in ADVISOR_PROMPT
+        assert "DIRECTION of an actionable decision must not affect" in ADVISOR_PROMPT
+        assert "entry order due today and an exit order due today are both HIGH" in ADVISOR_PROMPT
 
-    def test_all_three_levels_are_reachable(self):
-        # HIGH was unreachable in practice (1/328). Each level needs a concrete
-        # trigger or the scale keeps operating as two.
+    def test_levels_are_order_deadlines(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "HIGH   — act today" in ADVISOR_PROMPT
-        assert "MEDIUM — act this week" in ADVISOR_PROMPT
-        assert "LOW    — nothing to decide" in ADVISOR_PROMPT
+        assert "HIGH   — an order must be placed or changed today" in ADVISOR_PROMPT
+        assert "MEDIUM — an order or portfolio decision is required within five sessions" in ADVISOR_PROMPT
+        assert "LOW    — no order needs to change this week" in ADVISOR_PROMPT
 
-    def test_receding_level_can_lift_a_card_out_of_low(self):
-        # Reachability lives in the detail paragraph, which is only read when
-        # the card clears the urgency filter. So an unlikely-to-fill level must
-        # be able to raise urgency, or the reachability sentence is invisible.
+    def test_hold_is_always_low(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "receding fast enough that" in ADVISOR_PROMPT
+        assert "HOLD is always LOW" in ADVISOR_PROMPT
+        assert "Decision must be BUY, ADD, TRIM, or SELL rather than HOLD" in ADVISOR_PROMPT
 
     def test_urgency_is_not_conviction(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "Do NOT use urgency for conviction or position size" in ADVISOR_PROMPT
+        assert "Do NOT use it for conviction, downside magnitude, position size" in ADVISOR_PROMPT
 
-    def test_a_hold_may_be_high(self):
-        # Guards the reading that urgency is a property of the decision's
-        # direction rather than of its timing.
+    def test_buy_and_sell_use_their_own_action_levels(self):
         from watchy.advisor import ADVISOR_PROMPT
 
-        assert "A HOLD can be HIGH when a level is about to be hit" in ADVISOR_PROMPT
+        assert "For BUY or ADD, timing\nmay use the entry level in Target" in ADVISOR_PROMPT
+        assert "For TRIM or SELL, use the exit level" in ADVISOR_PROMPT
+        assert "never use the entry-only\nTarget to time a sale" in ADVISOR_PROMPT
 
 
 class TestReachabilityInDetail:

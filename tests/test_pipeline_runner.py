@@ -1,5 +1,6 @@
 """Tests for pipeline_runner: analyst/debate/risk mapping, result formatting, report saving."""
 
+import inspect
 import tempfile
 from pathlib import Path
 
@@ -17,7 +18,14 @@ from watchy.pipeline_runner import (
     _save_report,
     _strip_preamble,
     DEFAULT_REPORTS_DIR,
+    create_tradingagents_runner,
 )
+
+
+def test_v41_flash_is_default_for_both_reasoning_roles():
+    params = inspect.signature(create_tradingagents_runner).parameters
+    assert params["deep_think_llm"].default == "deepseek-flash"
+    assert params["quick_think_llm"].default == "deepseek-flash"
 
 
 class TestStripPreamble:

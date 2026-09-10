@@ -135,7 +135,8 @@ adapts to the share count:
 | Shares | What it can propose |
 |---|---|
 | **≥ 2** | Normal case — trim a whole-share tranche at a sell-limit. |
-| **exactly 1** | A partial trim is arithmetically impossible, so only a full exit or holding. A full exit is offered **only when the ATR runway says price is at the ceiling** (`< runway_near_atr`); with room left it holds, rather than cashing out a winner wholesale. |
+| **exactly 1, share < $1,000** | A partial trim is forbidden, so only a full exit or holding. A full exit is offered **only when the ATR runway says price is at the ceiling** (`< runway_near_atr`); with room left it holds, rather than cashing out a winner wholesale. |
+| **exactly 1, share ≥ $1,000** | A fractional market trim is allowed when strongly warranted. It has no limit price and must be placed by hand. |
 | **< 1 (fractional)** | A sell-limit needs whole shares, so **no limit price is proposed** — only a market sell of part or all of the fractional position. This forfeits the pre-placed-limit safety net (you must act by hand), so it is asked for only when warranted. |
 
 **Tier 2 batch order (#21):** the daily batch runs **held tickers first** (capital
@@ -151,6 +152,21 @@ into actionable advice, and pushes a natural-language summary to Telegram. The
 advisor's own token usage is logged as a `GEMINICOST` line; its thinking level is
 per-tier (`llm.gemini_thinking_tier1` and `llm.gemini_thinking_tier2`, both `low`)
 in `secrets.yaml`.
+
+Advisor urgency is an **order deadline**, not an importance score: `HIGH` means
+an order must change today, `MEDIUM` means a decision is required within five
+sessions, and `LOW` means no order change this week. `HOLD` is always `LOW`; if
+something requires action, the advisor must name an actionable decision instead.
+Malformed urgency text is normalized to the leading enum, while an unknown value
+falls back safely to `LOW` and emits a warning.
+
+**DeepSeek V4.1 Flash (2026-09-10):** the TradingAgents pipeline now uses the
+canonical `deepseek-flash` model for both its former deep and quick roles. DeepSeek
+retired V4 Flash and announced that V4 Pro requests will also route to V4.1 Flash
+from 2026-09-14 04:00 UTC until V4.1 Pro launches, so retaining two model aliases
+would no longer preserve two different models. The API shape and default `high`
+thinking mode are unchanged; `TOKENCOST` accounts for the V4.1 price cut and the
+dated Pro-alias routing transition.
 
 The summary tail is anchored on the Markdown table every analyst prompt asks for
 at the end of its report. If that table is missing, the digest silently falls back
@@ -249,7 +265,7 @@ See the full inline comments in `config.yaml` and `secrets.example.yaml`. Key se
 | `watchlist` | Tickers to monitor. Per-ticker overrides: Tier 1 interval, Tier 2 UTC time, `tier2_days` (tiered cadence, see below), optional `target_price`, and a per-ticker `min_price_proximity_pct` override (Tier 2 proximity gate, #15, defaults to the top-level global value; falls back to the #16 auto-derived target, never gated on the weekly full-risk day or when held). Tier 1 is never proximity-gated — it always scans during market hours. |
 | `min_price_proximity_pct` | **Global default** percent for the Tier 2 proximity gate (#15), applied to every watch-only (non-held) ticker; on ordinary trading days skip the daily LLM when price is farther than this from the entry target. Held tickers and the weekly full-risk run (first trading day of the week) always run; Tier 1 is unaffected. Override per-ticker with the same key. Remove to disable globally. |
 | `tier2_days` | **Tiered Tier 2 cadence.** Weekday abbreviations (`["mon","wed","fri"]`) a ticker runs its daily pipeline on; global default applies to any ticker without its own. Omit entirely for **every trading day** (the historical behaviour). One daily 4-analyst run costs roughly the same per ticker whatever the position is worth, so small positions can ride a lighter rotation and the batch still finishes before the 13:30 UTC open. **Never** skips the weekly full-risk day or a position already in the take-profit zone. |
-| `max_tier1_pipelines_per_day` | **Tier 1 intraday rescan cap** (#23), global or per-ticker. Every Tier 1 signal trip launches a paid `[market+social]` pipeline + advisor, guarded only by per-signal cooldown, so a busy ticker tripping several distinct signals stacks several paid rescans in a day (observed: KLAC ×4, LRCX ×3). This caps Tier 1 LLM pipelines per ticker per UTC day; further trips are still logged and notified (`Signal Fired (rescan capped)`) but skip the pipeline. Override per-ticker with the same key; remove the line to disable the cap. Tier 2 scheduled runs are never affected. **Ships as `1`** — a rescan costs ~79% of a full Tier 2 run, not the half it did when the cap landed, because the `pro` Research Manager + Portfolio Manager pair runs on every pipeline and does not shrink when analysts are dropped. |
+| `max_tier1_pipelines_per_day` | **Tier 1 intraday rescan cap** (#23), global or per-ticker. Every Tier 1 signal trip launches a paid `[market+social]` pipeline + advisor, guarded only by per-signal cooldown, so a busy ticker tripping several distinct signals stacks several paid rescans in a day (observed: KLAC ×4, LRCX ×3). This caps Tier 1 LLM pipelines per ticker per UTC day; further trips are still logged and notified (`Signal Fired (rescan capped)`) but skip the pipeline. Override per-ticker with the same key; remove the line to disable the cap. Tier 2 scheduled runs are never affected. **Ships as `1`**. The historical V4 rescan measured ~79% of a full Tier 2 run because Pro was a fixed two-node floor; V4.1 uses Flash for every node, so remeasure before reusing that ratio. |
 | `atr_proximity_mult` | Optional ATR-adaptive band (#15 follow-up), global or per-ticker. When set (and ATR data is available), the gate band is `mult × ATR%` (`ATR% = avg_atr_20d / price × 100`) instead of the fixed percent — wider for volatile names, narrower for calm ones. Clamped to `[proximity_pct_floor, proximity_pct_ceiling]` (default 4–20%); falls back to `min_price_proximity_pct` without ATR data. Calibrate with `scripts/calibrate_atr_proximity.py`. |
 | `take_profit` | Take-profit / anti-round-trip (#28), **enabled** (`enabled: true` by default; set `false` to turn off). Keys: `floor_gain_pct` (unrealized-gain % that arms the zone, default 10; per-ticker override via `take_profit_floor_gain_pct`), `limit_atr_mult`/`stretch_atr_mult` (size the suggested sell-limit as `price + mult×ATR`, default 1.5/3.0), `runway_near_atr`/`runway_far_atr` (ATR-runway band edges, default 1.0/2.5), `cooldown_h` (intraday zone-entry trigger cooldown, default 24). A held winner past the floor gets a sell-limit directive on the daily Tier 2 advice and a same-day Tier 1 intraday trigger. Advisory-only, whole shares. |
 | `signal_thresholds` | Detection thresholds for RSI, volume, ATR, etc. |

@@ -1,9 +1,9 @@
 """Per-component token + cost tracking for the TradingAgents pipeline.
 
 A LangChain callback handler that attributes DeepSeek token usage to both the
-*model* (deep_think v4-pro vs quick_think v4-flash) and the *graph node* (which
-analyst / debater / manager made the call), so we can see where the daily Tier 2
-cost actually goes before deciding what to trim.
+*model price tier* and the *graph node* (which analyst / debater / manager made
+the call), so we can see where the daily Tier 2 cost actually goes before
+deciding what to trim.
 
 Also breaks out the *reasoning* (thinking/CoT) slice of the output tokens per
 model and node — DeepSeek V4 runs every node in thinking mode by default and
@@ -15,8 +15,8 @@ graph passes the handler to both LLM constructors (see trading_graph.py), so a
 single instance sees every call. Every handler body is exception-safe: a bug
 here must never break a live pipeline run, only lose a measurement.
 
-Prices are the DeepSeek V4 published rates (USD per 1M tokens), selected by call
-time since DeepSeek went peak/off-peak on 2026-08-16 — see ``_prices_at``.
+Prices are the published DeepSeek rates (USD per 1M tokens), selected by call
+time across the V4 and V4.1 cutovers — see ``_prices_at``.
 Absolute USD is a *relative proxy* for the CNY bill (DeepSeek invoices in CNY);
 what we care about is the per-component *share*, which is currency-independent.
 """
@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 # anyway to keep TOKENCOST self-checking: if a schedule change ever drifts a
 # batch into the window, the logged cost doubles instead of quietly lying.
 _PRICING_CHANGE = datetime(2026, 8, 16, 16, 0, tzinfo=timezone.utc)
+_V41_FLASH_CHANGE = datetime(2026, 9, 10, 4, 0, tzinfo=timezone.utc)
+_PRO_ROUTE_CHANGE = datetime(2026, 9, 14, 4, 0, tzinfo=timezone.utc)
 
 _PRICES_FLAT = {  # before _PRICING_CHANGE; kept so old runs stay comparable
     "pro": {"in": 0.435, "cache": 0.003625, "out": 0.87},
@@ -56,6 +58,23 @@ _PRICES_OFFPEAK = {
 _PRICES_PEAK = {  # 2x off-peak
     "pro": {"in": 1.32, "cache": 0.044, "out": 3.96},
     "flash": {"in": 0.44, "cache": 0.014, "out": 1.32},
+}
+_PRICES_V41_OFFPEAK = {
+    # V4 Pro keeps its existing rate until it is routed to V4.1 Flash on Sep 14.
+    "pro": _PRICES_OFFPEAK["pro"],
+    "flash": {"in": 0.15, "cache": 0.003, "out": 0.60},
+}
+_PRICES_V41_PEAK = {
+    "pro": _PRICES_PEAK["pro"],
+    "flash": {"in": 0.30, "cache": 0.006, "out": 1.20},
+}
+_PRICES_V41_ROUTED_OFFPEAK = {
+    "pro": _PRICES_V41_OFFPEAK["flash"],
+    "flash": _PRICES_V41_OFFPEAK["flash"],
+}
+_PRICES_V41_ROUTED_PEAK = {
+    "pro": _PRICES_V41_PEAK["flash"],
+    "flash": _PRICES_V41_PEAK["flash"],
 }
 
 # Hours whose whole 60 minutes are inside a peak window. DeepSeek does not
@@ -70,16 +89,33 @@ def _prices_at(now: datetime | None = None) -> dict[str, dict[str, float]]:
     now = now or datetime.now(timezone.utc)
     if now < _PRICING_CHANGE:
         return _PRICES_FLAT
-    return _PRICES_PEAK if now.hour in _PEAK_HOURS_UTC else _PRICES_OFFPEAK
+    # DeepSeek prices weekends entirely off-peak. Watchy makes no scheduled
+    # weekend calls, but encoding it prevents misleading ad-hoc measurements.
+    peak = now.weekday() < 5 and now.hour in _PEAK_HOURS_UTC
+    if now < _V41_FLASH_CHANGE:
+        return _PRICES_PEAK if peak else _PRICES_OFFPEAK
+    if now >= _PRO_ROUTE_CHANGE:
+        return _PRICES_V41_ROUTED_PEAK if peak else _PRICES_V41_ROUTED_OFFPEAK
+    return _PRICES_V41_PEAK if peak else _PRICES_V41_OFFPEAK
 
 
-def _price_tier(model: str) -> str:
-    """Map a model name to a price tier; default to the cheaper 'flash'."""
-    return "pro" if model and "pro" in model.lower() else "flash"
+def _price_tier(model: str, now: datetime | None = None) -> str:
+    """Map a model name to its effective price tier at the call time."""
+    now = now or datetime.now(timezone.utc)
+    if model and "pro" in model.lower() and now < _PRO_ROUTE_CHANGE:
+        return "pro"
+    return "flash"
 
 
-def _cost_usd(model: str, input_tok: int, cached_tok: int, output_tok: int) -> float:
-    p = _prices_at()[_price_tier(model)]
+def _cost_usd(
+    model: str,
+    input_tok: int,
+    cached_tok: int,
+    output_tok: int,
+    now: datetime | None = None,
+) -> float:
+    now = now or datetime.now(timezone.utc)
+    p = _prices_at(now)[_price_tier(model, now)]
     miss = max(input_tok - cached_tok, 0)
     return (miss * p["in"] + cached_tok * p["cache"] + output_tok * p["out"]) / 1_000_000
 
