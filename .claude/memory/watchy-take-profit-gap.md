@@ -227,3 +227,11 @@ SKHY 是新上市 ADR、只有 23–24 根日线，而 `indicators.py:76` 有 `l
 下游零改动（消费方已全部 None-safe，逐一核过）。
 
 ⚠️ 连带：MU 已于 2026-08-13 删除（理由正是"与持仓的 SKHY 重复"），所以现在 **HBM 这条线没有任何可用监控**。
+
+## 2026-09-21 用户改判：1 股持仓也给止盈（推翻 8/7 的 "A+runway 护栏"）
+
+触发：SKHY(+25%)/COHR(+15%) 都是 1 股，零止盈输出。用户说 "Allow take profit at one share."
+新规则（`_sizing_directive` ==1 档）：**永远要求整股全清的限价单**——贴顶(runway<`runway_near_atr`)
+用 reachable 价(price+1.5×ATR)；有空间或 runway 未知 → **stretch 价(price+3×ATR)**，预挂、只在冲高时成交，
+不在当前价卖掉赢家。N/A 只在分析给出"连 stretch 都太低"的具体理由时才允许。advisor 奇股护栏补一句：
+护栏只管 Decision，HOLD + 预挂整股 Take-Profit 不矛盾。

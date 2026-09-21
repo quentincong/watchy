@@ -48,7 +48,10 @@ ODD-LOT / TINY-POSITION GUARD: use this exact arithmetic for an existing
 position. If it contains 2 or more whole shares, TRIM may sell any whole-share
 count from 1 through quantity-1, leaving at least 1 whole share. If it contains
 exactly 1 ordinary-priced whole share, TRIM is forbidden: choose HOLD, or SELL
-the entire share when the thesis is genuinely bearish. If the existing position
+the entire share when the thesis is genuinely bearish. That rule governs the
+Decision only: a resting whole-share sell-limit ABOVE the price on the
+'Take-Profit:' line, when a TAKE-PROFIT ZONE directive asks for one, is
+compatible with HOLD. If the existing position
 is already fractional (a non-whole share count), a partial fractional MARKET
 sell is allowed. The ONE exception for a whole-share position is a single
 high-priced share (roughly ≥ $1,000 per share), which may be trimmed

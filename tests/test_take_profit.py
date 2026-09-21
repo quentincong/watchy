@@ -301,19 +301,35 @@ class TestSizingDirective:
         assert "sell the whole 1-share position" in g
         assert "WHOLE SHARES ONLY" not in g
 
-    def test_single_share_with_runway_holds(self):
-        # runway 8 ATRs → real room left → must NOT liquidate to bank a trim.
-        # This is the EMR 2026-08-07 case: +12.9%, 1 share, upside far away.
+    def test_single_share_with_runway_gets_stretch_exit(self):
+        # runway 8 ATRs → real room left. This is the EMR 2026-08-07 case
+        # (+12.9%, 1 share, upside far away) that used to write N/A and leave
+        # the winner with no exit. Now: a full-exit limit at the stretch level
+        # (180 + 3x5 = 195), not at today's price.
         g = build_guidance("EMR", 180.0, 5.0, 220.0, self._cfg(), shares=1)
         assert "SINGLE-SHARE POSITION" in g
-        assert "write N/A" in g
-        assert "sell the whole 1-share position" not in g
+        assert "sell the whole 1-share position" in g
+        assert "STRETCH sell-limit" in g
+        assert "$195.00" in g.split("SINGLE-SHARE POSITION")[1]
+        assert "write N/A on" not in g
 
-    def test_unknown_runway_is_conservative_for_single_share(self):
-        # No upside level → runway None → must not be treated as "at ceiling".
+    def test_single_share_at_ceiling_uses_reachable_limit(self):
+        # runway 0.2 ATR → at the ceiling → limit at 199 + 1.5x5 = 206.50.
+        g = build_guidance("APH", 199.0, 5.0, 200.0, self._cfg(), shares=1)
+        assert "$206.50" in g.split("SINGLE-SHARE POSITION")[1]
+        assert "STRETCH" not in g
+
+    def test_unknown_runway_single_share_is_not_treated_as_ceiling(self):
+        # No upside level → runway None → stretch exit, not a near-price sale.
         g = build_guidance("EMR", 180.0, 5.0, None, self._cfg(), shares=1)
         assert "SINGLE-SHARE POSITION" in g
-        assert "sell the whole 1-share position" not in g
+        assert "STRETCH sell-limit" in g
+        assert "$195.00" in g.split("SINGLE-SHARE POSITION")[1]
+
+    def test_single_share_without_atr_still_asks_for_exit(self):
+        g = build_guidance("EMR", 180.0, None, None, self._cfg(), shares=1)
+        assert "sell the whole 1-share position" in g
+        assert "price + 3xATR" in g
 
     def test_fractional_position_forbids_a_limit_price(self):
         # ASML 0.2 shares: a sell-limit needs whole shares, so market only.

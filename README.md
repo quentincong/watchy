@@ -93,7 +93,10 @@ reachable `price + k×ATR` sell-limit — anchored on the broker's live mark, th
 same feed the gain is derived from) is injected into the advisor
 prompt, so the LLM actively proposes **banking a whole-share tranche via a
 sell-limit** — output as a new `Take-Profit:` line (e.g. *"sell 1 share at
-192.50"*) — instead of staying silent while the gain fades. The mechanical
+192.50"*) — instead of staying silent while the gain fades. A **1-share**
+position can't be trimmed, so its tranche is the whole share: a limit near the
+price when the runway says it's at the ceiling, otherwise a resting **stretch**
+limit (`price + stretch_atr_mult×ATR`) that only fills on a spike. The mechanical
 gain-gate is ground truth (it doesn't wait for the analysis to flag a top, which
 it does inconsistently); the LLM only sizes the trim and sets the limit. It runs
 on the **daily Tier 2** advice for every held name in the zone, plus a **Tier 1

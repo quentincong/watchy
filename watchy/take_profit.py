@@ -179,7 +179,11 @@ def extract_upside_level(analysis_text: str, current_price: float | None) -> flo
 
 
 def _sizing_directive(
-    shares: float | None, runway: float | None, cfg: "TakeProfitConfig"
+    shares: float | None,
+    runway: float | None,
+    cfg: "TakeProfitConfig",
+    limit: float | None = None,
+    stretch: float | None = None,
 ) -> str:
     """The action-space block: which sizes are actually executable (#28).
 
@@ -190,9 +194,12 @@ def _sizing_directive(
       MARKET sells (partial or full) are executable. That forfeits the
       pre-placed limit that normally catches the intraday high, so it only asks
       for action when the runway says price is at the ceiling.
-    * ``== 1`` — a partial trim is arithmetically impossible; the only
-      whole-share choices are a full exit or holding. Gated on a small runway so
-      a winner with room left isn't cashed out wholesale.
+    * ``== 1`` — a partial trim is arithmetically impossible, so the tranche is
+      the whole position. It still gets a resting sell-limit: near the price
+      when the runway says it's at the ceiling, otherwise at the stretch limit
+      (price + stretch_atr_mult x ATR) so it only fills on a spike and a winner
+      with room left isn't cashed out at today's price. (Before 2026-09-21 the
+      runway case wrote N/A, which left 1-share winners with no exit at all.)
     * ``>= 2`` — the normal case: trim a whole-share tranche at a limit.
 
     An unknown ``shares`` (None) falls through to the whole-share wording, which
@@ -222,20 +229,30 @@ def _sizing_directive(
 
     if shares is not None and shares < 2:
         if at_ceiling:
+            at = f"about ${limit:.2f}" if limit is not None else "roughly"
             return (
                 "- SINGLE-SHARE POSITION: exactly 1 share, so a partial trim is "
-                "arithmetically impossible — the only whole-share actions are "
-                "selling the ENTIRE position or holding. The runway above says "
-                "price is at the ceiling, so a full exit IS on the table: fill the "
-                "'Take-Profit:' line with 'sell the whole 1-share position at "
-                "<limit>', using a limit ABOVE the current price. Write N/A only if "
-                "you would genuinely rather hold."
+                "arithmetically impossible — the take-profit tranche is the ENTIRE "
+                "position. The runway above says price is at the ceiling, so fill "
+                "the 'Take-Profit:' line with 'sell the whole 1-share position at "
+                f"<limit>', using {at} the good-day-reachable level (a limit ABOVE "
+                "the current price). Write N/A only if you would genuinely rather "
+                "hold."
             )
+        at = (
+            f"about ${stretch:.2f}" if stretch is not None
+            else f"the stretch level (price + {cfg.stretch_atr_mult:g}xATR)"
+        )
         return (
             "- SINGLE-SHARE POSITION: exactly 1 share, so a partial trim is "
-            "arithmetically impossible, and the runway above shows real room left. "
-            "Do NOT liquidate the whole position just to bank a trim — write N/A on "
-            "the 'Take-Profit:' line and hold."
+            "arithmetically impossible — the take-profit tranche is the ENTIRE "
+            "position. Price is not at the ceiling, so do NOT sell it at today's "
+            "price; instead give a resting STRETCH sell-limit that only fills on a "
+            "spike: fill the 'Take-Profit:' line with 'sell the whole 1-share "
+            f"position at <limit>', using {at}. This keeps the winner running "
+            "while still banking the gain if price overshoots. Write N/A only if "
+            "the analysis gives a concrete reason that even the stretch level is "
+            "too low to sell at."
         )
 
     return (
@@ -338,5 +355,5 @@ def build_guidance(
             "something is the default when no ceiling can be identified."
         )
 
-    lines.append(_sizing_directive(shares, runway, cfg))
+    lines.append(_sizing_directive(shares, runway, cfg, limit=limit, stretch=stretch))
     return "\n".join(lines)
