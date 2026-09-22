@@ -14,6 +14,14 @@ parser, `validate_plan`, `plan_freshness`), new tables `analysis_plan` / `plan_r
 `state.db.v0-backup-<UTC>` before migrating a 1.x db (git-ignored). Budgets key on
 `market_calendar.session_label()` = New York date (never UTC midnight, which is 20:00 ET).
 
+**Phase 2 (weekly plan generation)** — daemon `_tier2_job`: weekly mode runs only when
+`is_weekly_full_risk_day()`; `run_daily_scan(weekly=True, tickers=...)` = Weekly Full (FULL risk,
+no cadence/gate), advisor `plan_request=True` → `watchy/weekly.py` build/validate/persist,
+`save_digest(kind="weekly")`, card appended to the advice message, single
+`weekly_plan_failures` alert per batch. Grep `PLAN_ACTIVE` / `PLAN_INVALID` / `WEEKLY_PLANS`.
+`scripts/compare_gemini_*.py` format ADVISOR_PROMPT directly — keep their `.format()` kwargs in
+sync with new prompt slots (`event_context`, `plan_instructions`).
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on

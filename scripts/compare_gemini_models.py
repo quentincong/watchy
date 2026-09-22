@@ -278,6 +278,9 @@ def main() -> int:
         analysis=_format_analysis(result),
         position=ps.format_position_context(ticker) or "No position held.",
         portfolio=ps.format_portfolio_context() or "Portfolio data unavailable.",
+        take_profit_guidance="",
+        event_context="",
+        plan_instructions="",
     )
 
     # --- new-model cell: reuse pasted 3.6, or call fresh ---

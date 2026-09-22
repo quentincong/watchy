@@ -172,6 +172,7 @@ class TelegramNotifier:
         *,
         position_text: str | None = None,
         advice: dict[str, str] | None = None,
+        plan_card: str | None = None,
     ) -> bool:
         """Notify with a natural-language pipeline summary + full report file.
 
@@ -231,6 +232,11 @@ class TelegramNotifier:
                 advice_lines.append(f"<b>💰 Take-Profit:</b> {esc(take_profit)}")
             if detail:
                 advice_lines.append(detail)
+        if plan_card:
+            # Watchy 2.0 weekly plan card (already escaped by watchy.messages).
+            if advice_lines:
+                advice_lines.append("")
+            advice_lines.append(plan_card)
         if advice_lines:
             ok = self.send("\n".join(advice_lines)) and ok
 
@@ -279,6 +285,23 @@ class TelegramNotifier:
             if detail:
                 lines.append(detail)
         return self.send("\n".join(lines))
+
+    def weekly_plan_failures(self, tickers: list[str], valid_count: int) -> bool:
+        """One alert per Weekly Full batch listing tickers without a valid plan.
+
+        Their previous plans are not extended: once last week's expiry passes,
+        Tier 1 treats them as expired and entry guidance is information-only.
+        """
+        names = ", ".join(self._escape_html(t) for t in tickers)
+        return self.send(
+            "<b>⚠ Weekly Plan Refresh Incomplete</b>\n"
+            f"<b>No valid plan:</b> {names}\n"
+            f"<b>Valid plans:</b> {valid_count}\n"
+            "Previous plans are NOT extended — these tickers get information-only "
+            "entry guidance until a weekly run succeeds. Risk and take-profit "
+            "monitoring continue. Force a rerun with "
+            "<code>scripts/watchy_ctl.py weekly TICKER --yes</code> (paid)."
+        )
 
     def advisor_failed(self, ticker: str, context: str) -> bool:
         """Notify that the advisor call failed for a ticker (#28 follow-up).
@@ -447,6 +470,7 @@ def _signal_label(signal_type: str) -> str:
         "atr_spike": "ATR Spike (≥ 1.5x avg)",
         "take_profit_zone": "Take-Profit Zone Entered",
         "scheduled_daily": "Scheduled Daily Run",
+        "weekly_full": "Weekly Full Analysis",
     }
     return labels.get(signal_type, signal_type)
 

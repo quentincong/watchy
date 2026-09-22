@@ -23,14 +23,25 @@ logger = logging.getLogger(__name__)
 DEFAULT_DIGEST_DIR = os.path.expanduser("~/watchy/reports")
 
 
-def _path(ticker: str, digest_dir: str | None = None) -> Path:
-    return Path(digest_dir or DEFAULT_DIGEST_DIR) / f"{ticker.upper()}_digest.json"
+def _path(ticker: str, digest_dir: str | None = None, kind: str = "") -> Path:
+    suffix = f"_{kind}" if kind else ""
+    return Path(digest_dir or DEFAULT_DIGEST_DIR) / f"{ticker.upper()}{suffix}_digest.json"
 
 
-def save_digest(ticker: str, result: dict[str, Any], digest_dir: str | None = None) -> None:
-    """Persist a pipeline result as this ticker's latest digest (best-effort)."""
+def save_digest(
+    ticker: str,
+    result: dict[str, Any],
+    digest_dir: str | None = None,
+    kind: str = "",
+) -> str | None:
+    """Persist a pipeline result as this ticker's latest digest (best-effort).
+
+    ``kind="weekly"`` keeps a separate copy of the Weekly Full digest (Watchy
+    2.0 Fast Recheck reuses it) so a later Tier 1 rescan cannot replace the
+    analysis the weekly plan was built from. Returns the path, or None.
+    """
     try:
-        path = _path(ticker, digest_dir)
+        path = _path(ticker, digest_dir, kind)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "saved_at": datetime.now(timezone.utc).isoformat(),
@@ -39,15 +50,17 @@ def save_digest(ticker: str, result: dict[str, Any], digest_dir: str | None = No
         # default=str so an unexpected non-JSON value degrades to its repr rather
         # than raising and losing the whole digest.
         path.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        return str(path)
     except Exception:  # noqa: BLE001
         logger.exception("Failed to save digest for %s", ticker)
+        return None
 
 
 def load_digest(
-    ticker: str, digest_dir: str | None = None
+    ticker: str, digest_dir: str | None = None, kind: str = ""
 ) -> tuple[dict[str, Any], datetime] | None:
     """Return (result, saved_at) for a ticker's latest digest, or None if absent/bad."""
-    path = _path(ticker, digest_dir)
+    path = _path(ticker, digest_dir, kind)
     if not path.exists():
         return None
     try:

@@ -105,9 +105,11 @@ class TestTier2DayGuard:
         mock_scan.assert_not_called()
 
     def test_job_runs_on_a_tier2_day(self):
+        # tier2_schedule: daily — the 1.x behaviour kept as the rollback.
+        config = MagicMock(weekly_mode=False)
         with patch("watchy.daemon._is_tier2_day", return_value=True), \
              patch("watchy.daemon.run_daily_scan") as mock_scan:
-            _tier2_job(MagicMock(), MagicMock(), MagicMock())
+            _tier2_job(config, MagicMock(), MagicMock())
         mock_scan.assert_called_once()
 
 

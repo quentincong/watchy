@@ -24,7 +24,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from watchy import __version__
 from watchy.config import WatchyConfig, load_config
 from watchy.market_calendar import get_calendar as get_market_calendar
-from watchy.market_calendar import is_trading_day
+from watchy.market_calendar import is_trading_day, is_weekly_full_risk_day
 from watchy.locks import TickerLockRegistry
 from watchy.notify import TelegramNotifier
 from watchy.state import StateStore
@@ -211,10 +211,17 @@ def _tier2_job(
     if not _is_tier2_day():
         logger.debug("Tier 2 skipped — market closed (weekend/holiday)")
         return
+    weekly = config.weekly_mode
+    if weekly and not is_weekly_full_risk_day():
+        # Watchy 2.0: routine daily Tier 2 is off; Tier 1 monitors the weekly
+        # plan instead. `tier2_schedule: daily` restores the 1.x daily run.
+        logger.info("Tier 2 skipped — tier2_schedule=weekly, not the week's first session")
+        return
     try:
         run_daily_scan(
             config, store, notifier,
             pipeline_runner=pipeline_runner, ticker_locks=ticker_locks,
+            weekly=weekly,
         )
     except Exception:
         logger.exception("Tier 2 job failed")
@@ -227,6 +234,10 @@ def main(config_path: str | None = None) -> None:
     logger = logging.getLogger("watchy.daemon")
 
     logger.info("Watchy %s starting", __version__)
+    logger.info(
+        "Mode: tier2_schedule=%s triggered_analysis.enabled=%s",
+        config.tier2_schedule, config.triggered_analysis.enabled,
+    )
     logger.info("Watchlist: %s", [tc.ticker for tc in config.watchlist])
 
     store = StateStore()

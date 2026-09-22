@@ -84,6 +84,40 @@ watchlist:
   #   # zone at a different unrealized-gain % than the global take_profit floor.
   #   take_profit_floor_gain_pct: 15.0
 
+# ---------------------------------------------------------------------------
+# Watchy 2.0 — weekly plan + event-driven monitoring
+# ---------------------------------------------------------------------------
+# tier2_schedule:
+#   weekly — (2.0) the full Tier 2 analysis runs ONLY on the first trading
+#            session of each week and produces a validated, persisted weekly
+#            plan per ticker; Tier 1 monitors that plan (no LLM) and routes
+#            technical triggers. tier2_days / the proximity gate do not apply.
+#   daily  — ROLLBACK to the exact 1.x behaviour: daily Tier 2 (tier2_days and
+#            the proximity gate apply) and paid Tier 1 signal rescans
+#            (max_tier1_pipelines_per_day). No database change is needed to
+#            switch either way; restart the daemon after editing.
+tier2_schedule: weekly
+
+# Plan monitoring (Tier 1, deterministic, zero cost).
+weekly_plan:
+  approach_atr: 0.5            # within 0.5 ATR above the buy zone = "approaching"
+  stale_move_atr: 0.5          # price moved > 0.5 ATR since an analysis → STALE — RECHECK REQUIRED
+  renotify_h: 6                # don't repeat the same plan state within 6h (boundary flapping)
+  market_data_max_age_min: 30  # older market data → stale, never actionable
+
+# Paid Tier 1 analysis (Fast Recheck = advisor-only on the weekly digest;
+# Triggered Risk = market+sentiment+news, bull/bear, simplified risk, advisor).
+# enabled: false = SHADOW MODE — routes are computed, logged (route_log table,
+# ROUTE journal lines) and mechanical reminders are sent, but no paid call is
+# made. Weekly Full and the take-profit path are never limited by this budget.
+# Budgets reset on the exchange trading-session boundary (New York date).
+triggered_analysis:
+  enabled: false
+  max_per_ticker_per_trading_day: 1
+  max_global_per_trading_day: 2
+  bearish_shock_atr: 0.75      # session move <= -0.75 ATR = material negative move
+  tickers: []                  # limited enablement allow-list; empty = all tickers
+
 # Tier 2 price-proximity gate (#15) — global default applied to every watch-only
 # (non-held) ticker. On weekdays, skip the daily LLM pipeline when price is farther
 # than this percent from the entry target (manual target_price, else the #16

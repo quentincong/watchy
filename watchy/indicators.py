@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -21,6 +22,11 @@ class IndicatorBundle:
     timestamp: pd.Timestamp | None = None
     # price
     current_price: float | None = None
+    # previous session close (Watchy 2.0: session move for the bearish-shock test)
+    prev_close: float | None = None
+    # when this bundle was fetched (UTC) — the market-price timestamp shown in
+    # logs and messages and checked by the stale-data guard
+    fetched_at: datetime | None = None
     # moving averages
     sma_50: float | None = None
     sma_150: float | None = None
@@ -80,6 +86,8 @@ def compute_indicators(
     bundle = IndicatorBundle(ticker=ticker)
     bundle.timestamp = df.index[-1] if hasattr(df.index[-1], "isoformat") else None
     bundle.current_price = float(close.iloc[-1])
+    bundle.prev_close = float(close.iloc[-2])
+    bundle.fetched_at = datetime.now(timezone.utc)
 
     # moving averages
     bundle.sma_50 = float(close.rolling(50).mean().iloc[-1])

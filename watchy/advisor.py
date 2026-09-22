@@ -84,7 +84,7 @@ about how far the move has run. Treat it as a yes/no fact — a gain exists — 
 take every magnitude judgement (how extended, where to set a limit, how much to
 sell) from price levels, ATR, and the analysts' cited targets.
 
-{take_profit_guidance}
+{take_profit_guidance}{event_context}
 Respond in this exact format:
 
 Ticker: {ticker}
@@ -141,7 +141,7 @@ Ticker: {ticker}
 
 --- YOUR PORTFOLIO OVERVIEW ---
 {portfolio}
-"""
+{plan_instructions}"""
 
 
 def _take_profit_guidance(
@@ -205,7 +205,7 @@ def _log_advice(
     position_source: PositionSource,
     indicator_bundle: Any,
     zone_armed: bool,
-) -> None:
+) -> int | None:
     """Write one advice_log row (#31); never raise into the advisor path.
 
     Instrumentation must not be able to lose an advice card that was paid for
@@ -214,7 +214,7 @@ def _log_advice(
     A/B harness) just doesn't log.
     """
     if store is None:
-        return
+        return None
     try:
         from watchy import take_profit as tpmod
 
@@ -224,7 +224,7 @@ def _log_advice(
             pos = None
         # Same anchor the take-profit limit uses, so a logged price and a logged
         # gain can never come from two different feeds (see tpmod.anchor_price).
-        store.log_advice(
+        row_id = store.log_advice(
             ticker,
             source=source,
             model=llm.model or "",
@@ -239,8 +239,10 @@ def _log_advice(
             gain_pct=tpmod.position_gain_pct(pos),
             zone_armed=zone_armed,
         )
+        return row_id if isinstance(row_id, int) else None
     except Exception:  # noqa: BLE001
         logger.warning("Advice log write failed for %s", ticker, exc_info=True)
+        return None
 
 
 def get_advice(
@@ -253,6 +255,8 @@ def get_advice(
     indicator_bundle: Any = None,
     store: Any = None,
     source: str = "",
+    plan_request: bool = False,
+    event_context: str = "",
 ) -> dict[str, str] | None:
     """Synthesize position-aware advice from analysis + portfolio.
 
@@ -268,6 +272,12 @@ def get_advice(
     ``store`` + ``source`` (optional) record the decision to the advice log
     (#31) for later forward-return scoring; ``source`` names the caller
     (tier1 / tier2 / take_profit_zone). Logging never affects the return value.
+
+    ``plan_request`` (Watchy 2.0 Weekly Full) appends the strict WEEKLY PLAN
+    block instructions; the parsed block is returned under ``_plan_block``
+    (a plan.ParsedBlock) and the raw text under ``_raw``, and the block is
+    stripped before the header/detail parse. ``event_context`` (Fast Recheck /
+    Triggered Risk) injects the trigger, plan-relative state and freshness.
 
     Returns a dict with keys: ticker, decision, urgency, target, take_profit,
     detail. Returns None if no LLM key is configured or the call fails.
@@ -293,6 +303,8 @@ def get_advice(
         position=position_text,
         portfolio=portfolio_text,
         take_profit_guidance=take_profit_guidance,
+        event_context=(event_context.strip() + "\n") if event_context else "",
+        plan_instructions=_plan_instructions() if plan_request else "",
     )
 
     try:
@@ -306,7 +318,16 @@ def get_advice(
             logger.warning("Unknown LLM provider: %s", llm.provider)
             return None
 
-        parsed = _parse_advice(result.strip(), ticker)
+        raw = result.strip()
+        plan_block = None
+        if plan_request:
+            from watchy.plan import parse_plan_block, strip_plan_block
+
+            plan_block = parse_plan_block(raw)
+            raw_for_advice = strip_plan_block(raw)
+        else:
+            raw_for_advice = raw
+        parsed = _parse_advice(raw_for_advice, ticker)
         # #28: a Take-Profit line only means something when the mechanical
         # gain-gate actually armed the zone. With no zone the model fills the
         # field unprompted, and on a 1-share holding "sell 1 share at X" is a
@@ -325,14 +346,25 @@ def get_advice(
         # #31: persist the decision with the book state behind it. Every call
         # site reaches the advisor through here, so this is the one place that
         # can't be forgotten when a new trigger is added.
-        _log_advice(
+        advice_log_id = _log_advice(
             store, ticker, source, llm, thinking_level, parsed,
             position_source, indicator_bundle, bool(take_profit_guidance),
         )
+        if advice_log_id is not None:
+            parsed["_advice_log_id"] = advice_log_id
+        if plan_request:
+            parsed["_plan_block"] = plan_block
+            parsed["_raw"] = raw
         return parsed
     except Exception:
         logger.exception("Advisor synthesis failed for %s", ticker)
         return None
+
+
+def _plan_instructions() -> str:
+    from watchy.plan import PLAN_BLOCK_INSTRUCTIONS
+
+    return PLAN_BLOCK_INSTRUCTIONS
 
 
 def _parse_advice(raw: str, fallback_ticker: str) -> dict[str, str]:

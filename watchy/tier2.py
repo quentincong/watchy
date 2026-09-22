@@ -24,12 +24,25 @@ from watchy.indicators import IndicatorBundle, compute_indicators
 from watchy.locks import TickerLockRegistry
 from watchy.market_calendar import is_weekly_full_risk_day
 from watchy.notify import TelegramNotifier
-from watchy.orchestrator import get_scheduled_spec, run_pipeline
+from watchy.orchestrator import (
+    AnalystSet,
+    DebateMode,
+    PipelineSpec,
+    RiskMode,
+    get_scheduled_spec,
+    run_pipeline,
+)
 from watchy.positions import get_position_source
 from watchy.proximity import is_outside_proximity
 from watchy.schwab_health import monitor_schwab
 from watchy.state import StateStore
 from watchy.take_profit import effective_floor_pct, is_in_zone, position_gain_pct
+from watchy.weekly import (
+    build_weekly_plan,
+    failed_weekly_plan,
+    persist_plan,
+    render_weekly_card,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +54,29 @@ def run_daily_scan(
     *,
     pipeline_runner: Any = None,
     ticker_locks: TickerLockRegistry | None = None,
+    weekly: bool = False,
+    tickers: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run Tier 2 for every ticker on the watchlist.
+
+    ``weekly=True`` is the Watchy 2.0 Weekly Full run: every ticker (cadence
+    and proximity gate never apply), full 3-way risk debate, and the advisor is
+    asked for a strict weekly plan that is validated and persisted. ``tickers``
+    restricts the batch (manual "force Weekly Full for one ticker").
 
     Returns a dict mapping ticker → pipeline result.
     """
     results: dict[str, dict[str, Any]] = {}
     now = datetime.now(timezone.utc)
+    wanted = {t.upper() for t in tickers} if tickers else None
+    n_tickers = sum(
+        1 for tc in config.watchlist if wanted is None or tc.ticker.upper() in wanted
+    )
 
-    logger.info("Tier 2 daily scan starting for %d tickers", len(config.watchlist))
+    logger.info(
+        "Tier 2 %s scan starting for %d tickers",
+        "weekly full" if weekly else "daily", n_tickers,
+    )
 
     # Fetch positions once for the whole batch and reuse the snapshot across every
     # ticker (the account is the same for all of them). This both avoids N redundant
@@ -62,7 +89,7 @@ def run_daily_scan(
     # Pre-fetch indicators for every ticker up front (throttled to avoid a
     # yfinance burst, #1) so we can both order the batch by priority and reuse
     # each bundle in the pipeline instead of re-fetching it.
-    plan = _prefetch_plan(config, store, position_source, now)
+    plan = _prefetch_plan(config, store, position_source, now, wanted, weekly)
 
     # Run in priority order (#21): held tickers first (capital at risk), then
     # watch-only nearest-to-target (most actionable), no-target/no-price last.
@@ -93,12 +120,21 @@ def run_daily_scan(
         try:
             results[ticker] = _run_ticker(
                 entry, config, store, notifier, position_source,
-                pipeline_runner, ticker_locks,
+                pipeline_runner, ticker_locks, weekly=weekly,
             )
         except Exception as exc:
             logger.exception("Tier 2 failed for %s", ticker)
             notifier.error(f"Tier 2: {ticker}", exc)
             results[ticker] = {"error": str(exc)}
+            if weekly:
+                # Keep a record of the failed refresh. It is invalid, so it
+                # neither activates nor extends last week's plan.
+                pid = persist_plan(
+                    store,
+                    failed_weekly_plan(ticker, f"{type(exc).__name__}: {exc}"),
+                )
+                results[ticker]["plan_id"] = pid
+                results[ticker]["plan_valid"] = False
 
     succeeded = sum(1 for r in results.values() if "error" not in r)
     # Advisor failures don't fail the run, so they were invisible in this line
@@ -107,10 +143,24 @@ def run_daily_scan(
     advisor_failed = sum(1 for r in results.values() if r.get("advisor_failed"))
     skipped = sum(1 for r in results.values() if r.get("skipped"))
     logger.info(
-        "Tier 2 daily scan complete: %d/%d succeeded (%d skipped, %d advisor-failed)",
-        succeeded, len(config.watchlist), skipped, advisor_failed,
+        "Tier 2 %s scan complete: %d/%d succeeded (%d skipped, %d advisor-failed)",
+        "weekly full" if weekly else "daily",
+        succeeded, n_tickers, skipped, advisor_failed,
     )
+    if weekly:
+        _report_weekly_plans(results, notifier)
     return results
+
+
+def _report_weekly_plans(
+    results: dict[str, dict[str, Any]], notifier: TelegramNotifier
+) -> None:
+    """One summary alert when any weekly plan failed (never one per ticker)."""
+    bad = sorted(t for t, r in results.items() if r.get("plan_valid") is False)
+    good = sum(1 for r in results.values() if r.get("plan_valid") is True)
+    logger.info("WEEKLY_PLANS valid=%d invalid=%d invalid_tickers=%s", good, len(bad), bad)
+    if bad:
+        notifier.weekly_plan_failures(bad, good)
 
 
 @dataclass
@@ -136,6 +186,8 @@ def _prefetch_plan(
     store: StateStore,
     position_source: Any,
     now: datetime,
+    wanted: set[str] | None = None,
+    weekly: bool = False,
 ) -> list[_PlanEntry]:
     """Compute indicators + gate decision for every watchlist ticker up front.
 
@@ -143,7 +195,10 @@ def _prefetch_plan(
     pipeline so no ticker is fetched twice.
     """
     plan: list[_PlanEntry] = []
-    for i, tc in enumerate(config.watchlist):
+    selected = [
+        tc for tc in config.watchlist if wanted is None or tc.ticker.upper() in wanted
+    ]
+    for i, tc in enumerate(selected):
         if i > 0 and config.tier2_throttle_s > 0:
             time.sleep(config.tier2_throttle_s)
         ticker = tc.ticker
@@ -157,6 +212,10 @@ def _prefetch_plan(
         cadence_skip = _should_skip_cadence(
             tc, config, now, _in_take_profit_zone(position_source, ticker, config)
         )
+        if weekly:
+            # Weekly Full plans every ticker; the cost controls that exist to
+            # thin a *daily* batch do not apply to the one run a week.
+            skip = cadence_skip = False
         plan.append(
             _PlanEntry(
                 ticker, tc, bundle, state, held, price, avg_atr, target, skip,
@@ -207,6 +266,8 @@ def _run_ticker(
     position_source: Any,
     pipeline_runner: Any = None,
     ticker_locks: TickerLockRegistry | None = None,
+    *,
+    weekly: bool = False,
 ) -> dict[str, Any]:
     """Run the Tier 2 pipeline for one pre-planned ticker.
 
@@ -235,9 +296,15 @@ def _run_ticker(
     lock = ticker_locks.get(ticker) if ticker_locks else nullcontext()
 
     spec = get_scheduled_spec(now)
+    trigger = "scheduled_daily"
+    if weekly:
+        # Weekly Full always carries the full 3-way risk debate, including a
+        # manual force on a mid-week day.
+        spec = PipelineSpec(AnalystSet.FULL, DebateMode.BULL_BEAR, RiskMode.FULL)
+        trigger = "weekly_full"
 
     with lock:
-        run_id = store.start_run(ticker, "tier2", "scheduled_daily")
+        run_id = store.start_run(ticker, "tier2", trigger)
         try:
             result = run_pipeline(ticker, spec, runner=pipeline_runner)
             if stage_context:
@@ -247,6 +314,7 @@ def _run_ticker(
             # Stash the digest so the Tier 1 take-profit trigger (#28) can
             # re-advise a held winner intraday off the freshest daily analysis.
             save_digest(ticker, result)
+            weekly_digest = save_digest(ticker, result, kind="weekly") if weekly else None
 
             # synthesize advice (reuse the position source from the gate check).
             # Pass the pre-fetched bundle so the take-profit gate (#28) can read
@@ -257,7 +325,8 @@ def _run_ticker(
                 ticker, result, position_source, config,
                 thinking_level=config.llm.gemini_thinking_tier2,
                 indicator_bundle=bundle,
-                store=store, source="tier2",
+                store=store, source="weekly_full" if weekly else "tier2",
+                plan_request=weekly,
             )
 
             # An advisor failure is not fatal to the run (the analysis itself is
@@ -266,7 +335,9 @@ def _run_ticker(
             # result so the batch summary can count it.
             if advice is None:
                 logger.warning("Tier 2: no advice synthesized for %s", ticker)
-                notifier.advisor_failed(ticker, "Tier 2 scheduled daily run")
+                notifier.advisor_failed(
+                    ticker, "Weekly Full run" if weekly else "Tier 2 scheduled daily run"
+                )
                 result["advisor_failed"] = True
 
             # Auto-derive the Tier 2 proximity target (#16) from the advisor's
@@ -282,15 +353,52 @@ def _run_ticker(
                         derived_target_ts=_now_iso(),
                     )
 
+            plan_card = None
+            if weekly:
+                plan_card = _weekly_plan_step(
+                    entry, result, advice, store, now,
+                    {
+                        "mode": "weekly_full",
+                        "run_id": run_id,
+                        "report_path": result.get("report_path"),
+                        "digest_path": weekly_digest,
+                    },
+                )
+
             notifier.pipeline_result(
-                ticker, "scheduled_daily", result,
+                ticker, trigger, result,
                 position_text=position_text,
                 advice=advice,
+                plan_card=plan_card,
             )
             return result
         except Exception as exc:
             store.complete_run(run_id, success=False, summary=str(exc))
             raise
+
+
+def _weekly_plan_step(
+    entry: _PlanEntry,
+    result: dict[str, Any],
+    advice: dict[str, Any] | None,
+    store: StateStore,
+    now: datetime,
+    source_ref: dict[str, Any],
+) -> str:
+    """Build, validate and persist the weekly plan; return its message card."""
+    bundle = entry.bundle
+    plan = build_weekly_plan(
+        entry.ticker, advice, result,
+        held=entry.held,
+        input_price=bundle.current_price if bundle is not None else None,
+        input_price_ts=(bundle.fetched_at or now) if bundle is not None else None,
+        now=now,
+        source_ref=source_ref,
+    )
+    pid = persist_plan(store, plan, raw_output=(advice or {}).get("_raw", ""))
+    result["plan_id"] = pid
+    result["plan_valid"] = plan.is_valid
+    return render_weekly_card(plan, advice, result, bundle, now)
 
 
 def _effective_target(

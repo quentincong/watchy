@@ -197,6 +197,8 @@ def main() -> int:
         position=ps.format_position_context(ticker) or "No position held.",
         portfolio=ps.format_portfolio_context() or "Portfolio data unavailable.",
         take_profit_guidance=_take_profit_guidance(ticker, analysis_text, ps, config, None),
+        event_context="",
+        plan_instructions="",
     )
 
     levels = [x.strip() for x in args.levels.split(",") if x.strip()]

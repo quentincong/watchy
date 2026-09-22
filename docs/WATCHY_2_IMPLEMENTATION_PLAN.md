@@ -501,3 +501,12 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   one-time SQLite online backup (`state.db.v0-backup-<UTC>`) before upgrading a 1.x database. A
   migration error raises and leaves the database in place. `market_calendar` gains
   `session_label` (New York session date, used for budgets) and `week_session_bounds` (plan validity).
+- **Phase 2 — Weekly plan generation: done.** `tier2_schedule: weekly` makes the 10:02 UTC job run
+  only on the week's first session, as a Weekly Full batch (every ticker, full 3-way risk, cadence
+  and proximity gate bypassed). The advisor gets the strict plan-block instructions
+  (`plan_request=True`); `watchy/weekly.py` builds, validates and persists the plan (valid plans
+  supersede the previous weekly base; invalid ones and pipeline failures are stored as `invalid`
+  rows that never extend the old plan). A separate `<TICKER>_weekly_digest.json` preserves the
+  analysis the plan came from. The weekly card (`watchy/messages.py`) is appended to the advice
+  message; one batch alert lists tickers without a valid plan. Until the Phase 5 guards land, every
+  weekly card is labelled `INFORMATION ONLY`.
