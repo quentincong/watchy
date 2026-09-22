@@ -290,6 +290,18 @@ def scan_planned(
     )
 
     ev = evaluate_plan(ticker, bundle, config, store, now)
+    hold_expiry = False
+    if ev.state == ReminderState.EXPIRED and ev.transition is not None and ev.transition.notify:
+        try:
+            hold_expiry = store.get_kv("weekly_full_running") == ev.session
+        except Exception:  # noqa: BLE001
+            hold_expiry = False
+        if hold_expiry:
+            # This week's Weekly Full is still running; its new plan re-arms the
+            # reminders. Don't announce the old plan's expiry (or persist it)
+            # until the batch is done — a failure is alerted by the batch itself.
+            logger.info("Plan expiry reminder for %s held: weekly batch in progress", ticker)
+            ev.transition.notify = False
     transition = ev.transition.kind if ev.transition is not None and ev.transition.notify else ""
     ta = config.triggered_analysis
     allowed = not ta.tickers or ticker.upper() in {t.upper() for t in ta.tickers}
@@ -384,7 +396,8 @@ def scan_planned(
     if decision.invalidate_plan:
         invalidate_if_broken(store, ev, "; ".join(decision.reasons))
 
-    persist_reminder(store, ev)
+    if not hold_expiry:
+        persist_reminder(store, ev)
     t1._update_state(store, bundle, ticker, take_profit_zone=tp_zone, quantity=tp_qty)
     record["latency_s"] = round(time.monotonic() - started, 3)
     try:

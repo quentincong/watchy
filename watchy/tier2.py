@@ -22,7 +22,7 @@ from watchy.config import TickerConfig, WatchyConfig
 from watchy.digest_store import save_digest
 from watchy.indicators import IndicatorBundle, compute_indicators
 from watchy.locks import TickerLockRegistry
-from watchy.market_calendar import is_weekly_full_risk_day
+from watchy.market_calendar import is_weekly_full_risk_day, session_label
 from watchy.monitor import fetch_live_price
 from watchy.notify import TelegramNotifier
 from watchy.orchestrator import (
@@ -86,6 +86,47 @@ def run_daily_scan(
     # alerts if it isn't live (expired token) or is nearing the 7-day limit.
     position_source = get_position_source(config)
     monitor_schwab(config, store, notifier, position_source)
+
+    if weekly:
+        # Tier 1 holds "plan expired" reminders while this batch is replacing
+        # last week's plans (a long Monday batch can overlap the open).
+        _set_weekly_running(store, session_label(now).isoformat())
+        try:
+            return _run_batch(
+                config, store, notifier, position_source, now, wanted, weekly,
+                n_tickers, results, pipeline_runner, ticker_locks,
+            )
+        finally:
+            _set_weekly_running(store, "")
+    return _run_batch(
+        config, store, notifier, position_source, now, wanted, weekly,
+        n_tickers, results, pipeline_runner, ticker_locks,
+    )
+
+
+WEEKLY_RUNNING_KEY = "weekly_full_running"
+
+
+def _set_weekly_running(store: StateStore, session: str) -> None:
+    try:
+        store.set_kv(WEEKLY_RUNNING_KEY, session)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not record weekly batch state", exc_info=True)
+
+
+def _run_batch(
+    config: WatchyConfig,
+    store: StateStore,
+    notifier: TelegramNotifier,
+    position_source: Any,
+    now: datetime,
+    wanted: set[str] | None,
+    weekly: bool,
+    n_tickers: int,
+    results: dict[str, dict[str, Any]],
+    pipeline_runner: Any,
+    ticker_locks: TickerLockRegistry | None,
+) -> dict[str, dict[str, Any]]:
 
     # Pre-fetch indicators for every ticker up front (throttled to avoid a
     # yfinance burst, #1) so we can both order the batch by priority and reuse
