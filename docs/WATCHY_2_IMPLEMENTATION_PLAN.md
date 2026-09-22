@@ -569,3 +569,12 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   repository. `scripts/watchy_ctl.py` (`watchy/ctl.py`) provides `status`, `plan show|history|expire`,
   dry `route` / `preview` (no LLM, no Telegram, no writes), `weekly TICKER --yes` (paid force) and
   `replay`. Schedule and enablement switches stay configuration edits + restart, as §15 requires.
+- **Plan-expiry hold (follow-up):** the Weekly Full batch marks itself in `kv`
+  (`weekly_full_running = <session>`) so Tier 1 does not announce N "plan expired" reminders while a
+  long Monday batch overlaps the open; failures are still alerted once by the batch.
+- **Phase 9 — Documentation and release preparation: done.** README (EN/ZH), `project_doc.md`,
+  `CLAUDE.md`, `config.yaml` comments, [`WATCHY_2_OPERATIONS.md`](WATCHY_2_OPERATIONS.md) (deployment,
+  shadow checklist, limited enablement, controls, migration, rollback) and
+  [`RELEASE_NOTES_v2.0.0-rc.1.md`](RELEASE_NOTES_v2.0.0-rc.1.md). Package version `2.0.0rc1` in both
+  `pyproject.toml` and `watchy/__init__.py` (a test enforces equality). No tag, release, push or
+  deployment was made — those need owner review (§20 gate 2 onward).

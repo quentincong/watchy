@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "watchy"
-version = "0.1.0"
+version = "2.0.0rc1"
 description = "Stock monitoring daemon on top of TradingAgents"
 requires-python = ">=3.11"
 dependencies = [

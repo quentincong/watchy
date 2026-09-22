@@ -1,7 +1,10 @@
 # Watchy — Shared Project Instructions for Claude Code and Codex
 
 Watchy is a stock-monitoring daemon built on top of TradingAgents.
-Tier 1 = hourly technical signal scanner (no LLM). Tier 2 = scheduled daily LLM pipeline.
+**Watchy 2.0** (`tier2_schedule: weekly`, default): Tier 2 = Weekly Full LLM pipeline on the first
+trading session of each week → validated weekly plan; Tier 1 = 30-min scan (no LLM) that monitors the
+plan and routes triggers through a pure router (paid Fast Recheck / Triggered Risk off by default =
+shadow mode). `tier2_schedule: daily` = config rollback to the exact 1.x daily behaviour.
 
 ## How this file works
 
@@ -26,9 +29,14 @@ detail to a memory file and leave a one-line pointer here.
   repository. That GitHub-sync function is suspended: do not run the script or restore
   its SessionEnd hook. See memory `watchy-memory-sync` for the local shared-directory setup.
 
-## Current status (2026-06-15)
+## Current status (2026-09-22)
 
-Backlog #1–#18 essentially done; system deployed on the VPS and validated. Detail in memory:
+**Watchy 2.0 `v2.0.0-rc.1` implemented locally (not pushed/deployed/tagged)** per
+`docs/WATCHY_2_IMPLEMENTATION_PLAN.md` (§22 = status). Ops, shadow procedure, migration and rollback:
+`docs/WATCHY_2_OPERATIONS.md`; design log → memory `watchy-2-implementation`. VPS still runs 1.x until
+the owner pushes. Package version `2.0.0rc1` (`pyproject.toml` = `watchy/__init__.py`, test-enforced).
+
+1.x backlog #1–#18 essentially done; system deployed on the VPS and validated. Detail in memory:
 
 - **Cost / per-component TOKENCOST** → memory `watchy-api-cost-baseline`. The 2026-08-21 V4 baseline was
   **¥7.9/trading day ≈ ¥165/month ≈ ¥2.0k/year**, with Pro ≈37% despite only RM/PM using it. DeepSeek
@@ -47,7 +55,8 @@ Backlog #1–#18 essentially done; system deployed on the VPS and validated. Det
   port 22; Cloudflare Tunnel SSH still a TODO.)
 
 ⚠️ The auto-update timer restarts the daemon on every push — **don't push during the Tier-2 window
-(~10:00–13:00 UTC; Mondays run long, to ~14:00)** or you interrupt the batch. Measure before trusting
+(~10:00–13:00 UTC; Mondays run long, to ~14:00; in 2.0 weekly mode Tier 2 runs only on the week's
+first session, but Tier 1 routing runs all session)** or you interrupt the batch. Measure before trusting
 this range — per-ticker time moves whenever the DeepSeek flash model is retrained (see below).
 
 ## Architecture / ops ground truth
@@ -59,6 +68,12 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
   **US trading days only** (weekends AND NYSE holidays skipped — there is no weekend run). The full 3-way
   risk debate rides the **first trading session of each week** (normally Monday, shifting to Tuesday on a
   holiday — `market_calendar.is_weekly_full_risk_day`); other days run 4 analysts with simplified risk.
+  **2.0 weekly mode:** only that first-session run happens (Weekly Full, every ticker); Tier 1 runs
+  `monitor.scan_planned` (router + plan reminders; ROUTE journal line + `route_log` per scan). Take-profit
+  (#28) rules unchanged and never budget-limited. Operator CLI: `scripts/watchy_ctl.py`.
+- 2.0 invariants: plans/guards/router are pure and LLM-free; invalid/expired/missing plans and stale data
+  can never yield actionable entry wording; the status is chosen by `guards.select_status`, never the LLM;
+  replay and tests never call an LLM; state.db migrations stay additive (`user_version` 2 + one-time backup).
 - TradingAgents uses DeepSeek V4.1 Flash (`deepseek-flash`) for both the deep (RM/PM) and quick roles.
   V4.1 keeps the OpenAI-compatible Chat Completions shape and default high thinking effort; no manual
   prompt-template or thinking-parameter migration is required. The Gemini advisor remains separate.

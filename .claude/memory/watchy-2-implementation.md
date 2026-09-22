@@ -51,6 +51,14 @@ tolerant; `reroute_logged` determinism check), `watchy/ctl.py` + `scripts/watchy
 placeholders ($0.01 FR, $0.06 TR) — re-measure before quoting. `tier1._bundle_summary` now logs
 `prev_close` + `avg_atr_20d` into signal_log so future replays can recompute the shock test.
 
+**Phase 9 (docs/release)** — README EN/ZH 2.0 sections, `docs/WATCHY_2_OPERATIONS.md` (exact VPS
+shadow deploy steps, checklist, rollback), `docs/RELEASE_NOTES_v2.0.0-rc.1.md`, version `2.0.0rc1`
+(test-enforced equal in pyproject + `__init__`). Weekly batch sets kv `weekly_full_running` to hold
+"plan expired" reminders during a long Monday batch. **Nothing pushed, deployed or tagged** — the
+owner must review, then push outside the Tier-2 window (ideally Fri after 20:00 UTC / weekend so
+Monday's Weekly Full creates the first plans) and tag `v2.0.0-rc.1` (`gh release create` needs the
+FULL sha). The older note in [[watchy-git-workflow]] about `0.1.0` is superseded by this bump.
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on

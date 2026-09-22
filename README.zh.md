@@ -7,7 +7,31 @@
 > 🌐 English version: [README.md](README.md)
 
 
-基于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 多智能体 LLM 交易框架的股票监控守护进程（daemon）。Watchy 帮你盯着自选股（watchlist）——每小时跑一次零成本的技术指标扫描（indicator scan），每天跑一次全深度分析（full-depth analysis），并通过 Telegram 推送持仓感知的交易建议（position-aware advice）。
+基于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 多智能体 LLM 交易框架的股票监控守护进程（daemon）。Watchy 帮你盯着自选股（watchlist）——每 30 分钟一次零成本的技术指标 + 周计划扫描，每周一次全深度分析并转成结构化交易计划，通过 Telegram 推送持仓感知的操作指引。
+
+> **Watchy 2.0（`v2.0.0-rc.1`）— 每周定计划，有事才反应（Plan Weekly, React When It Matters）。** 把“每天一条 AI 意见”改成“每周一份交易计划 + 事件驱动监控”：更少但更有用的打扰、明确的执行边界、保留风险与止盈监控、减少不必要的 LLM 调用。它仍是决策辅助系统，**不下单**，也**不宣称能预测收益或产生 alpha**；路由阈值是待 shadow 验证的初始策略。`tier2_schedule: daily` 可回滚到下文描述的 1.x 行为。运维见 [`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md)，发布说明见 [`docs/RELEASE_NOTES_v2.0.0-rc.1.md`](docs/RELEASE_NOTES_v2.0.0-rc.1.md)。
+
+## Watchy 2.0 — 周计划 + 事件驱动监控
+
+**四种模式。**
+- **Weekly Full**：每周第一个交易日（周一；周一休市则周二）对每只票跑完整流水线（4 分析师 + 多空辩论 + 完整三方风控），cadence 和邻近门控不适用；advisor 额外输出严格格式的 `WEEKLY PLAN` 块：决策（BUY/ADD/HOLD/TRIM/SELL/WATCH —— 未持仓票上的 HOLD 记为 WATCH）、紧迫度、论点、买入区间、追高上限（chase ceiling）、失效价位/条件、减仓条件、阻力区、止盈价、指引、明确的“不要做”。计划有效到本周最后一个交易日，激活前严格校验（枚举、有限数、区间顺序、合理性、时间戳、到期）；不合格输出只存档诊断、永不可执行；刷新失败**绝不延长**上周计划（批次只发一条汇总告警）。
+- **Notify Only**：Tier 1 确定性提醒，无 LLM。
+- **Fast Recheck**：只用保存的周 digest 再问一次 advisor。
+- **Triggered Risk**：市场 + 情绪 + 新闻分析师、多空辩论、简化风控、advisor。
+
+止盈路径（#28）规则不变，并在路由中优先级最高、不受预算限制。
+
+**计划监控。** 每次扫描把价格对照计划分类（失效 / 阻力·止盈区 / 高于追高上限 / 买入区内 / 接近买入区（区间上方 `weekly_plan.approach_atr`×ATR 内）/ 区外 / 已过期），**只在状态切换时提醒**（状态持久化在 `plan_reminder_state`，重启不重复；新计划重新武装；`renotify_h` 内不重复同一提醒）。跌破失效价位即撤销计划（保留历史）。价格进入计划内买入区**不会**触发付费分析。
+
+**路由（初始策略，待 shadow 验证）：** 死叉——持仓/未知→Triggered Risk，观察票→提醒并撤销看多计划；MACD 死叉——持仓→Fast Recheck（叠加 ≥`bearish_shock_atr` 的下跌→Triggered Risk），观察票→提醒；布林下轨/RSI 超卖——持仓同上，观察票仅在看多买入计划仍可执行时 Fast Recheck；ATR/放量——叠加下跌冲击时持仓→Triggered Risk，否则提醒；RSI 超买/布林上轨——提醒（持仓赢家走止盈路径）；金叉/MACD 金叉——有可执行看多计划→Fast Recheck，否则提醒；进入买入区/高于追高上限/离开买入区/到期→提醒；跌破失效→持仓 Triggered Risk + 即时警告、观察票提醒并撤销计划。多个触发同时出现**只跑一次分析**，保留全部原因。
+
+付费路由在以下情况降级为 Notify Only：`triggered_analysis.enabled: false`（**shadow 模式，出厂默认**）、不在 `tickers` 白名单、Fast Recheck 输入缺失、该票正在分析中、或超出单票/全局每交易时段预算（按纽约交易日切换，重启不丢）。
+
+**确定性状态**（LLM 只能解释，不能改）：`ACT NOW`、`WAIT FOR LIMIT`、`DO NOT CHASE`、`RISK REVIEW`、`PLAN INVALID`、`STALE — RECHECK REQUIRED`、`INFORMATION ONLY`。每次分析后都重新取价（分析期间移动超过 `stale_move_atr` 个 ATR → STALE）；高于追高上限永远是 `DO NOT CHASE`；跌破失效是 `PLAN INVALID`/`RISK REVIEW`；数据过期、计划缺失/过期/无效、或上游 SELL/HOLD 配 advisor BUY/ADD，都绝不会显示成可执行买入；机械提醒永远不是 `ACT NOW`。
+
+**可观测性与控制。** 每次 Tier 1 评估写一条 `ROUTE {json}` 日志和 `route_log` 行；周一有 `PLAN_ACTIVE` / `PLAN_INVALID` / `WEEKLY_PLANS`。`scripts/watchy_ctl.py`：`status`、`plan show|history|expire`、只读的 `route` / `preview`（不调 LLM、不发 Telegram、不写库）、`weekly TICKER --yes`（付费强制跑）、`replay`（只读、零成本的路由回放，只统计量与时效、不评估盈利）。
+
+> 下文描述共用机制与 1.x 每日行为，即 `tier2_schedule: daily` 下仍在运行的逻辑。
 
 ## 架构（Architecture）
 
@@ -129,6 +153,9 @@ sudo systemctl enable --now watchy-update.timer
 
 | 配置项 | 用途 |
 |--------|------|
+| `tier2_schedule` | **Watchy 2.0**。`weekly`（默认）：Tier 2 只在每周第一个交易日作为 Weekly Full 运行并生成已校验计划，Tier 1 监控计划并路由触发；`daily`：配置回滚到完全的 1.x 行为（每日 Tier 2 + `tier2_days`/邻近门控 + 付费 Tier 1 重扫）。拼错会在启动时报错 |
+| `weekly_plan` | 计划监控：`approach_atr`（0.5）、`stale_move_atr`（0.5，分析期间价格移动超过即 STALE）、`renotify_h`（6）、`market_data_max_age_min`（30） |
+| `triggered_analysis` | 付费 Tier 1 分析：`enabled`（**false = shadow 模式**）、`max_per_ticker_per_trading_day`（1）、`max_global_per_trading_day`（2）、`bearish_shock_atr`（0.75）、`tickers`（有限启用白名单，空 = 全部）。Weekly Full 与止盈不受其限制 |
 | `watchlist` | 监控的股票列表（自选股），可按票设置 Tier 1 间隔、Tier 2 UTC 时间、`tier2_days`（分层 cadence，见下）、可选的 `target_price`，以及按票覆盖的 `min_price_proximity_pct`（Tier 2 邻近门控，#15，默认取顶层全局值；目标价缺省时用 #16 自动推导值，持仓票与每周完整风控日永不门控）以及按票覆盖的 `max_tier1_pipelines_per_day`（Tier 1 盘中重扫上限，#23）。Tier 1 不做邻近门控，交易时段内始终扫描 |
 | `min_price_proximity_pct` | Tier 2 邻近门控（#15）的**全局默认**百分比，套到所有 watch-only（非持仓）票；普通交易日现价离入场目标价超过该值就跳过当日 LLM。持仓票与每周完整风控日（每周第一个交易日）永不门控，Tier 1 不受影响。可按票用同名键覆盖；删除/留空即全局关闭 |
 | `tier2_days` | **Tier 2 分层 cadence**。星期缩写列表（`["mon","wed","fri"]`），指定该票在哪几天跑日常流水线；全局默认套用到没单独设置的票。**整个不写 = 每个交易日都跑**（历史行为）。一次 4 分析师流水线的年成本与仓位大小无关，所以小仓位可以走轻档，同时让批次赶在 13:30 UTC 开盘前跑完。**每周完整风控日**和**已进入止盈区的持仓**永不被跳过 |
@@ -234,8 +261,18 @@ watchy/
     ├── positions.py          # 分层持仓源: Schwab → 缓存快照 → 手动文件
     ├── schwab.py             # Schwab 券商 API 客户端 (实时层, schwabdev)
     ├── notify.py             # Telegram 机器人通知
-    ├── tier1.py              # 每小时信号扫描
-    ├── tier2.py              # 每日完整流水线
+    ├── tier1.py              # 30 分钟扫描（2.0 转交 monitor.scan_planned；1.x 路径 = daily 回滚）
+    ├── tier2.py              # 定时流水线（2.0 Weekly Full / 1.x 每日）
+    ├── plan.py               # 2.0 契约：计划/状态/路由/状态码，严格解析 + 校验
+    ├── weekly.py             # 2.0 Weekly Full → 校验并持久化计划 + 周卡片
+    ├── plan_monitor.py       # 2.0 价格对计划分类 + 状态切换检测（纯函数）
+    ├── router.py             # 2.0 Tier 1 触发路由（纯函数，每次扫描一条路由）
+    ├── guards.py             # 2.0 状态选择、冲突与分析后价格守卫（纯函数）
+    ├── monitor.py            # 2.0 Tier 1 编排（提醒、路由、ROUTE 日志）
+    ├── triggered.py          # 2.0 Fast Recheck / Triggered Risk（预算、锁、override）
+    ├── messages.py           # 2.0 Telegram 状态卡片渲染（纯函数）
+    ├── replay.py             # 2.0 零成本路由回放（只读数据库）
+    ├── ctl.py                # 2.0 运维命令（scripts/watchy_ctl.py）
     └── daemon.py             # APScheduler 入口
 ```
 
@@ -245,7 +282,7 @@ watchy/
 
 ## 文档（Documentation）
 
-完整技术文档见 [`project_doc.md`](project_doc.md) —— 涵盖模块内部实现、数据流、部署、测试策略和配置参考。
+完整技术文档见 [`project_doc.md`](project_doc.md) —— 涵盖模块内部实现、数据流、部署、测试策略和配置参考。Watchy 2.0：[`docs/WATCHY_2_IMPLEMENTATION_PLAN.md`](docs/WATCHY_2_IMPLEMENTATION_PLAN.md)（规格 + 实施状态）、[`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md)（部署、shadow 模式、迁移、回滚、控制）、[`docs/RELEASE_NOTES_v2.0.0-rc.1.md`](docs/RELEASE_NOTES_v2.0.0-rc.1.md)。
 
 ## 许可证（License）
 

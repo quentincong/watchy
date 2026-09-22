@@ -162,3 +162,14 @@ class TestExpiryHeldDuringWeeklyBatch:
                            MagicMock(), weekly=True)
         assert seen == [session_label().isoformat()]
         assert store.get_kv("weekly_full_running") == ""
+
+
+class TestVersion:
+    def test_package_version_matches_pyproject(self):
+        import re
+        from pathlib import Path
+
+        import watchy
+        text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
+        assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == watchy.__version__
+        assert watchy.__version__ == "2.0.0rc1"

@@ -6,6 +6,14 @@ Watchy is a long-running Python daemon that monitors a configurable list of stoc
 
 **Tech stack:** Python 3.11+, APScheduler, yfinance, pandas, SQLite, Telegram Bot API.
 
+> **Watchy 2.0 (`v2.0.0-rc.1`).** With the default `tier2_schedule: weekly`, Tier 2 runs only on the
+> first trading session of each week (Weekly Full) and produces a validated, persisted weekly plan;
+> Tier 1 monitors the plan and routes technical triggers through a pure router, with paid Fast
+> Recheck / Triggered Risk disabled by default (shadow mode). This document describes the shared
+> machinery and the 1.x daily design that `tier2_schedule: daily` restores. For 2.0 see
+> [`docs/WATCHY_2_IMPLEMENTATION_PLAN.md`](docs/WATCHY_2_IMPLEMENTATION_PLAN.md) (spec, §22 status),
+> [`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md) and the README.
+
 ---
 
 ## File Structure
@@ -34,7 +42,7 @@ Watchy is a long-running Python daemon that monitors a configurable list of stoc
 
 ### 1. `watchy/__init__.py`
 
-Package marker. Exposes `__version__ = "0.1.0"`.
+Package marker. Exposes `__version__` (`"2.0.0rc1"`, the PEP 440 form of the `v2.0.0-rc.1` tag; kept equal to `pyproject.toml`).
 
 ---
 

@@ -7,9 +7,125 @@
 > 🌐 Chinese version: [README.zh.md](README.zh.md)
 
 A stock-monitoring daemon built on the [TradingAgents](https://github.com/TauricResearch/TradingAgents)
-multi-agent LLM trading framework. Watchy watches your watchlist for you — an
-hourly zero-cost technical indicator scan, a daily full-depth analysis, and
-position-aware advice pushed to Telegram.
+multi-agent LLM trading framework. Watchy watches your watchlist for you — a
+zero-cost technical and plan-level scan every 30 minutes, a weekly full-depth
+analysis that becomes a structured trading plan, and position-aware guidance
+pushed to Telegram.
+
+> **Watchy 2.0 (`v2.0.0-rc.1`) — Plan Weekly, React When It Matters.** Watchy
+> 2.0 turns daily AI opinions into a weekly trading plan with event-driven
+> monitoring: fewer but more useful interventions, explicit execution
+> boundaries, preserved risk and take-profit monitoring, and less unnecessary LLM
+> usage. It remains a decision-support system — it never places orders and does
+> not claim to predict returns or generate alpha; its routing thresholds are an
+> initial policy under shadow validation. `tier2_schedule: daily` restores the
+> 1.x behaviour described in the later sections. See
+> [Watchy 2.0](#watchy-20--weekly-plan--event-driven-monitoring),
+> [`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md) and the
+> [release notes](docs/RELEASE_NOTES_v2.0.0-rc.1.md).
+
+## Watchy 2.0 — weekly plan + event-driven monitoring
+
+```
+ Mon (first session)                 every 30 min, market hours (no LLM)
+ ───────────────────                 ───────────────────────────────────
+ Weekly Full: 4 analysts             indicators + position + weekly plan
+ + bull/bear + full risk                 │
+ + advisor → strict WEEKLY PLAN      triggers: signals, plan transitions,
+   │ validate (enums, ordering,      take-profit gate
+   │ plausibility, expiry)               │
+   ▼                                     ▼
+ analysis_plan (history kept) ──►  pure router → ONE route per scan
+                                     TAKE_PROFIT / invalidation
+                                     > TRIGGERED_RISK > FAST_RECHECK
+                                     > NOTIFY_ONLY > NO_ACTION
+                                         │ (paid routes only if enabled,
+                                         │  allowed and within budget)
+                                         ▼
+                              deterministic guards → Telegram status card
+```
+
+**Four modes.** *Weekly Full* runs the full pipeline on the first trading
+session of the week (Monday, Tuesday after a Monday holiday) for every ticker —
+cadence and the proximity gate do not apply — and asks the advisor for a strict
+`WEEKLY PLAN` block: decision (BUY/ADD/HOLD/TRIM/SELL/WATCH — advisor HOLD on a
+name you don't hold is stored as WATCH), urgency, thesis, buy zone, chase
+ceiling, invalidation level/condition, trim condition, resistance, take-profit
+price, guidance and a concrete *do not*. The plan is valid through the week's
+last session and is validated before activation; invalid output is stored for
+diagnosis and never becomes actionable, and a failed refresh never extends last
+week's plan (one batch alert lists tickers without a valid plan). *Notify Only*
+is the deterministic Tier 1 reminder. *Fast Recheck* re-asks only the advisor
+using the saved weekly digest. *Triggered Risk* runs market + sentiment + news,
+bull/bear, simplified risk and the advisor. The take-profit path (#28) keeps its
+rules and wins routing priority.
+
+**Plan monitoring.** Each scan classifies the price against the plan —
+invalidated, resistance/take-profit territory, above the chase ceiling, inside
+the buy zone, approaching it (within `weekly_plan.approach_atr` × ATR above),
+outside, or expired — and notifies only on a transition (persisted in
+`plan_reminder_state`, so restarts don't repeat; a new plan re-arms; the same
+reminder isn't repeated within `renotify_h`). Crossing the invalidation level
+withdraws the plan (history kept). Entering a planned buy zone never triggers a
+paid call — the weekly plan already authorised watching it.
+
+**Routing policy (initial, under shadow validation):**
+
+| Trigger | Held / unknown position | Watch-only |
+|---|---|---|
+| Death cross | Triggered Risk | Notify; withdraw a bullish plan |
+| MACD bearish cross | Fast Recheck; Triggered Risk with a ≥ `bearish_shock_atr` down move | Notify |
+| Bollinger lower breach / RSI oversold | Fast Recheck; Triggered Risk with a shock move | Fast Recheck if a bullish buy plan is still executable, else Notify |
+| ATR spike / volume anomaly | Triggered Risk with a shock move, else Notify | Notify |
+| RSI overbought / Bollinger upper | Notify (take-profit path handles eligible winners) | Notify with a plan, else no action |
+| Golden cross / MACD bullish | Fast Recheck if a bullish plan is executable, else Notify | same |
+| Buy-zone entry, above chase, left zone, expiry | Notify | Notify |
+| Invalidation crossed | Triggered Risk + immediate warning | Notify, plan withdrawn |
+| Take-profit floor crossed | existing take-profit path | — |
+
+Paid routes are downgraded to the Notify Only reminder when
+`triggered_analysis.enabled` is false (**shadow mode**, the shipped default), the
+ticker isn't on the `tickers` allow-list, Fast Recheck inputs are missing, the
+ticker is busy, or a per-ticker / global per-session budget is spent (budgets
+reset on the New York trading-session date and survive restarts). A reminder
+whose wanted interpretation didn't run is capped at `INFORMATION ONLY`.
+
+**Deterministic status** (the LLM can explain but never override it): `ACT NOW`,
+`WAIT FOR LIMIT`, `DO NOT CHASE`, `RISK REVIEW`, `PLAN INVALID`,
+`STALE — RECHECK REQUIRED`, `INFORMATION ONLY`. The price is re-checked after
+every analysis (a move over `stale_move_atr` ATRs → stale); above the chase
+ceiling is always `DO NOT CHASE`; beyond invalidation is `PLAN INVALID` /
+`RISK REVIEW`; stale market data, a missing/expired/invalid plan, or a SELL/HOLD
+verdict paired with BUY/ADD advice can never read as an actionable buy. A
+mechanical reminder is never `ACT NOW`.
+
+```text
+NVDA — 🟡 WAIT FOR LIMIT
+Price: $122.40 as of 10:32 ET
+
+Why now: price entered the weekly buy zone.
+Weekly plan: BUY; valid while above $116.00; buy zone $121.00–$123.00; chase ceiling $125.00
+Thesis: AI capex demand intact while price holds the 50-day average.
+Price vs plan: inside the buy zone
+Guidance: consider a limit order within the planned range (buy zone $121.00–$123.00)
+Do not: do not chase above 125.
+Invalidation: daily close below 116; level $116.00. Plan expires after Fri 2026-09-25 session.
+Verdict: BUY | Advisor: BUY | Alignment: agree
+Mode: Tier 1 plan reminder; no new LLM analysis; weekly plan #42 from Mon 2026-09-21 06:35 ET
+Advisory only — Watchy does not place orders; you decide and execute.
+```
+
+**Observability & controls.** Every Tier 1 evaluation writes a `ROUTE {json}`
+journal line and a `route_log` row; Monday logs `PLAN_ACTIVE` / `PLAN_INVALID` /
+`WEEKLY_PLANS`. `scripts/watchy_ctl.py` offers `status`, `plan
+show|history|expire`, a dry `route` and `preview` (no LLM, no Telegram, no
+writes), `weekly TICKER --yes` (paid force) and `replay` — a read-only,
+zero-cost routing replay over the database (and an explicitly supplied research
+CSV) reporting volume and timing, not profitability. Deployment, the shadow
+checklist and rollback: [`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md).
+
+> The sections below describe the shared machinery and the 1.x daily behaviour,
+> which is still what runs under `tier2_schedule: daily`.
 
 ## Architecture
 
@@ -265,6 +381,9 @@ See the full inline comments in `config.yaml` and `secrets.example.yaml`. Key se
 
 | Setting | Purpose |
 |---------|---------|
+| `tier2_schedule` | **Watchy 2.0.** `weekly` (default): Tier 2 runs only on the first trading session of the week as Weekly Full and produces validated plans; Tier 1 monitors plans and routes triggers. `daily`: the configuration rollback to the exact 1.x behaviour (daily Tier 2 with `tier2_days`/proximity gate, paid Tier 1 rescans). A typo fails at startup. |
+| `weekly_plan` | Plan monitoring: `approach_atr` (0.5 — "approaching" band above the buy zone), `stale_move_atr` (0.5 — price move during an analysis that forces `STALE`), `renotify_h` (6 — no repeat of the same plan state within this window), `market_data_max_age_min` (30). |
+| `triggered_analysis` | Paid Tier 1 analysis: `enabled` (**false** = shadow mode), `max_per_ticker_per_trading_day` (1), `max_global_per_trading_day` (2), `bearish_shock_atr` (0.75 — session move that counts as a material negative move), `tickers` (allow-list for limited enablement; empty = all). Weekly Full and take-profit are never limited by it. |
 | `watchlist` | Tickers to monitor. Per-ticker overrides: Tier 1 interval, Tier 2 UTC time, `tier2_days` (tiered cadence, see below), optional `target_price`, and a per-ticker `min_price_proximity_pct` override (Tier 2 proximity gate, #15, defaults to the top-level global value; falls back to the #16 auto-derived target, never gated on the weekly full-risk day or when held). Tier 1 is never proximity-gated — it always scans during market hours. |
 | `min_price_proximity_pct` | **Global default** percent for the Tier 2 proximity gate (#15), applied to every watch-only (non-held) ticker; on ordinary trading days skip the daily LLM when price is farther than this from the entry target. Held tickers and the weekly full-risk run (first trading day of the week) always run; Tier 1 is unaffected. Override per-ticker with the same key. Remove to disable globally. |
 | `tier2_days` | **Tiered Tier 2 cadence.** Weekday abbreviations (`["mon","wed","fri"]`) a ticker runs its daily pipeline on; global default applies to any ticker without its own. Omit entirely for **every trading day** (the historical behaviour). One daily 4-analyst run costs roughly the same per ticker whatever the position is worth, so small positions can ride a lighter rotation and the batch still finishes before the 13:30 UTC open. **Never** skips the weekly full-risk day or a position already in the take-profit zone. |
@@ -380,8 +499,19 @@ watchy/
     ├── positions.py          # layered position source: Schwab → cached snapshot → manual file
     ├── schwab.py             # Schwab brokerage API client (live layer, schwabdev)
     ├── notify.py             # Telegram bot notifications
-    ├── tier1.py              # hourly signal scan
-    ├── tier2.py              # daily full pipeline
+    ├── tier1.py              # 30-min scan (2.0: dispatches to monitor.scan_planned; 1.x path = daily rollback)
+    ├── tier2.py              # scheduled pipeline (2.0 Weekly Full / 1.x daily)
+    ├── plan.py               # 2.0 contracts: plan, states, routes, statuses; strict parser + validator
+    ├── weekly.py             # 2.0 Weekly Full → validated, persisted plan + weekly card
+    ├── plan_monitor.py       # 2.0 price-to-plan classification + transition detection (pure)
+    ├── router.py             # 2.0 Tier 1 trigger router (pure, one route per scan)
+    ├── guards.py             # 2.0 status selection, conflict + post-analysis price guards (pure)
+    ├── monitor.py            # 2.0 Tier 1 orchestration (reminders, routing, ROUTE log)
+    ├── triggered.py          # 2.0 Fast Recheck / Triggered Risk (budget, lock, overrides)
+    ├── messages.py           # 2.0 Telegram status-card renderer (pure)
+    ├── replay.py             # 2.0 zero-cost routing replay (read-only db)
+    ├── ctl.py                # 2.0 operator controls (scripts/watchy_ctl.py)
+    ├── market_calendar.py    # XNYS sessions, weekly bounds, session labels
     └── daemon.py             # APScheduler entry point
 ```
 
@@ -396,6 +526,10 @@ call); `watchy/pipeline_runner.py` is the real bridge.
 
 See [`project_doc.md`](project_doc.md) for full technical documentation — module
 internals, data flow, deployment, testing strategy, and a config reference.
+Watchy 2.0: [`docs/WATCHY_2_IMPLEMENTATION_PLAN.md`](docs/WATCHY_2_IMPLEMENTATION_PLAN.md)
+(spec + implementation status), [`docs/WATCHY_2_OPERATIONS.md`](docs/WATCHY_2_OPERATIONS.md)
+(deployment, shadow mode, migration, rollback, controls) and
+[`docs/RELEASE_NOTES_v2.0.0-rc.1.md`](docs/RELEASE_NOTES_v2.0.0-rc.1.md).
 
 ## License
 
