@@ -31,10 +31,10 @@ detail to a memory file and leave a one-line pointer here.
 
 ## Current status (2026-09-22)
 
-**Watchy 2.0 `v2.0.0-rc.1` implemented locally (not pushed/deployed/tagged)** per
-`docs/WATCHY_2_IMPLEMENTATION_PLAN.md` (§22 = status). Ops, shadow procedure, migration and rollback:
-`docs/WATCHY_2_OPERATIONS.md`; design log → memory `watchy-2-implementation`. VPS still runs 1.x until
-the owner pushes. Package version `2.0.0rc1` (`pyproject.toml` = `watchy/__init__.py`, test-enforced).
+**Watchy 2.0 `v2.0.0-rc.1` is live on the VPS in shadow mode (2026-09-22; prerelease tag on `18ce84c`)**
+per `docs/WATCHY_2_IMPLEMENTATION_PLAN.md` (§22 = status). Ops, shadow procedure, migration and rollback:
+`docs/WATCHY_2_OPERATIONS.md`; design log + deployment record → memory `watchy-2-implementation`.
+Keep `triggered_analysis.enabled: false` until the shadow review is done. Package version `2.0.0rc1` (`pyproject.toml` = `watchy/__init__.py`, test-enforced).
 
 1.x backlog #1–#18 essentially done; system deployed on the VPS and validated. Detail in memory:
 

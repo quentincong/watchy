@@ -64,6 +64,20 @@ before the WAL pragma; a newer `user_version` → RuntimeError, db untouched); `
 `market_calendar.session_close_utc()` so a forced Weekly Full after the final session's close plans
 next week (calendar-aware early closes / holiday weeks; 16:00 ET fallback).
 
+**🚀 DEPLOYED IN SHADOW + RC RELEASED (2026-09-22 ~04:35 UTC)** — pushed `18ce84c` (full
+18ce84c1196a2e523235b43d5212c17ac623a973); VPS auto-updated, logs `Watchy 2.0.0rc1 starting` /
+`tier2_schedule=weekly triggered_analysis.enabled=False`; migration → `user_version=2`, auto-backup
+`~/watchy/state.db.v0-backup-20260922T043501Z`, manual backup `~/watchy_backups/state.db.pre-v2-manual-20260922`
+(kept OUTSIDE the repo so the tree stays clean). **Real-model smoke (one paid NVDA Weekly Full via
+`watchy_ctl.py weekly NVDA --yes`, ~7.5 min, off-peak):** Gemini emitted the WEEKLY PLAN block, 0 parse
+errors, plan #1 active, 0 validation errors (ADD/MEDIUM, zone 220–221, chase 228.50, inv 214.40, valid
+09-22..09-25, verdict BUY → agree, card status INFORMATION ONLY since price 227.38 was outside the zone).
+Release: https://github.com/quentincong/watchy/releases/tag/v2.0.0-rc.1 (prerelease, tag on 18ce84c).
+Known nits: `watchy_ctl.py weekly` configures no logging, so its PLAN_*/WEEKLY_CARD/TOKENCOST INFO lines are
+lost (only DB rows + stdout JSON remain); a forced mid-week card still says "first trading session of the
+week" in *Why now*. Next: 1–2 weeks shadow review per `docs/WATCHY_2_OPERATIONS.md` §4; first automatic
+Weekly Full = Mon 2026-09-28 10:02 UTC; `v2.0.0` only after shadow + limited enablement.
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on
