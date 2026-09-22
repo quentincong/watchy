@@ -105,7 +105,9 @@ class TestShadowMode:
     def test_watch_death_cross_withdraws_bullish_plan(self, store):
         pid = store.insert_plan(_plan())
         _, notifier = scan(store, 122.0, ["death_cross"], held=False)
-        assert "PLAN INVALID" in notifier.send.call_args.args[0]
+        text = notifier.send.call_args.args[0]
+        assert "PLAN INVALID" in text and "withdrawn" in text
+        assert "limit order" not in text and "WAIT FOR LIMIT" not in text
         assert store.get_plan(pid).status == "invalidated"
 
     def test_every_scan_logged_even_quiet(self, store):
@@ -113,3 +115,28 @@ class TestShadowMode:
         scan(store, 124.1, [])
         rows = store.get_route_log("NVDA")
         assert len(rows) == 2 and all(r["route"] == "NO_ACTION" for r in rows)
+
+
+class TestFailSafe:
+    def test_routing_crash_still_fires_take_profit(self, store):
+        from watchy.config import TakeProfitConfig
+        from watchy.tier1 import scan_ticker
+
+        config = WatchyConfig(watchlist=[TickerConfig(ticker="NVDA")],
+                              take_profit=TakeProfitConfig(enabled=True, floor_gain_pct=10.0))
+        notifier = MagicMock()
+        src = MagicMock()
+        pos = MagicMock(quantity=3, unrealized_pnl_pct=15.0, current_price=130.0,
+                        average_cost=110.0)
+        src.get_position.return_value = pos
+        with patch("watchy.tier1.compute_indicators", return_value=_bundle(130.0)), \
+             patch("watchy.tier1.detect_signals", return_value=[]), \
+             patch("watchy.tier1.get_position_source", return_value=src), \
+             patch("watchy.tier1.load_digest", return_value=None), \
+             patch("watchy.tier1.get_advice", return_value={"decision": "TRIM"}) as adv, \
+             patch("watchy.monitor.evaluate_plan", side_effect=RuntimeError("corrupt plan")):
+            scan_ticker("NVDA", config, store, notifier)
+        adv.assert_called_once()
+        notifier.take_profit_alert.assert_called_once()
+        notifier.error.assert_called_once()
+        assert store.get_ticker_state("NVDA")["prev_take_profit_zone"] == 1

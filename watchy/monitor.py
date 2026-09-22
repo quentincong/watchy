@@ -203,10 +203,18 @@ def build_reminder(
     usable = ev.plan if ev.freshness in (
         PlanFreshness.ACTIVE, PlanFreshness.EXPIRED, PlanFreshness.INVALIDATED,
     ) else None
-    guidance, dont = reminder_wording(
-        usable, ev.state, ev.transition.kind if ev.transition else "",
-        position_state, ev.price,
-    )
+    if ev.freshness == PlanFreshness.INVALIDATED and ev.state != ReminderState.INVALIDATED:
+        # Withdrawn for a reason other than the price level (e.g. a watch-only
+        # death cross): no zone-based wording may survive the withdrawal.
+        guidance, dont = (
+            "the weekly plan is withdrawn — no entry guidance until the next weekly plan",
+            "do not enter or add while the plan is withdrawn",
+        )
+    else:
+        guidance, dont = reminder_wording(
+            usable, ev.state, ev.transition.kind if ev.transition else "",
+            position_state, ev.price,
+        )
     msg_notes = list(notes or [])
     if ev.data_stale:
         msg_notes.append("market data is stale — verify the live price before acting")
@@ -262,12 +270,10 @@ def scan_planned(
     routed by the pure router, and at most one analysis runs. Every evaluation
     writes a structured ROUTE record (journal + route_log table).
     """
-    import json
     import time
 
     from watchy import tier1 as t1
     from watchy.orchestrator import get_cooldown_hours
-    from watchy.router import RouterInput, route
 
     now = now or datetime.now(timezone.utc)
     started = time.monotonic()
@@ -288,6 +294,55 @@ def scan_planned(
     tp_zone, tp_qty, tp_fire, tp_gain = t1._take_profit_decision(
         ticker, prev, config, store, position_source, False,
     )
+
+    try:
+        return _route_and_act(
+            ticker, bundle, config, store, notifier, position_source, pstate,
+            fired, actionable, cooled, tp_zone, tp_qty, tp_fire, tp_gain,
+            pipeline_runner=pipeline_runner, ticker_locks=ticker_locks,
+            now=now, started=started,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A routing/plan bug must never suppress the take-profit alert or the
+        # state update that keeps its edge detection correct.
+        logger.exception("Plan routing failed for %s — take-profit fail-safe", ticker)
+        # _fire_take_profit logs its signal first, so an alert that already went
+        # out before the failure is in cooldown and is not sent twice.
+        if tp_fire and not store.is_in_cooldown(
+            ticker, "take_profit_zone", config.take_profit.cooldown_h
+        ):
+            t1._fire_take_profit(ticker, bundle, config, store, notifier, position_source, tp_gain)
+        t1._update_state(store, bundle, ticker, take_profit_zone=tp_zone, quantity=tp_qty)
+        notifier.error(f"Tier 1 routing: {ticker}", exc)
+        return actionable
+
+
+def _route_and_act(
+    ticker: str,
+    bundle: Any,
+    config: Any,
+    store: Any,
+    notifier: Any,
+    position_source: Any,
+    pstate: PositionState,
+    fired: list[str],
+    actionable: list[str],
+    cooled: list[str],
+    tp_zone: Any,
+    tp_qty: Any,
+    tp_fire: bool,
+    tp_gain: Any,
+    *,
+    pipeline_runner: Any,
+    ticker_locks: Any,
+    now: datetime,
+    started: float,
+) -> list[str]:
+    import json
+    import time
+
+    from watchy import tier1 as t1
+    from watchy.router import RouterInput, route
 
     ev = evaluate_plan(ticker, bundle, config, store, now)
     hold_expiry = False

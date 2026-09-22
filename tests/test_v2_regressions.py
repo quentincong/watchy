@@ -173,3 +173,19 @@ class TestVersion:
         text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
         assert re.search(r'^version = "([^"]+)"', text, re.M).group(1) == watchy.__version__
         assert watchy.__version__ == "2.0.0rc1"
+
+
+class TestPlanWording:
+    def _card(self, plan, fresh):
+        return render_plan_card(MessageContext(
+            ticker="NVDA", status=TelegramStatus.INFORMATION_ONLY, plan=plan, plan_freshness=fresh))
+
+    def test_deactivated_and_invalidated_wording(self):
+        p = make_plan()
+        p.status = "deactivated"
+        assert "deactivated by the operator" in self._card(p, PlanFreshness.INVALID)
+        p.status = "invalidated"
+        card = self._card(p, PlanFreshness.INVALIDATED)
+        assert "invalidated (thesis broken)" in card and "Withdrawn plan" in card
+        bad = make_plan(decision="MAYBE")
+        assert "failed validation" in self._card(bad, PlanFreshness.INVALID)

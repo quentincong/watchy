@@ -140,6 +140,14 @@ def render_plan_card(ctx: MessageContext) -> str:
     fresh = ctx.plan_freshness
     if plan is None or fresh == PlanFreshness.MISSING:
         lines.append("<b>Weekly plan:</b> none active — entry guidance is information-only.")
+    elif fresh == PlanFreshness.INVALID and plan.status == "deactivated":
+        lines.append("<b>Weekly plan:</b> deactivated by the operator — not actionable.")
+    elif fresh == PlanFreshness.INVALIDATED:
+        lines.append(
+            "<b>Weekly plan:</b> invalidated (thesis broken) — withdrawn; no entry guidance "
+            "until the next weekly plan."
+        )
+        lines.append(f"<i>Withdrawn plan:</i> {plan_summary(plan)}")
     elif fresh == PlanFreshness.INVALID:
         lines.append("<b>Weekly plan:</b> failed validation — not actionable (see journal).")
     elif fresh == PlanFreshness.EXPIRED:

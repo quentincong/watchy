@@ -10,7 +10,6 @@ from watchy.plan import (
     BLOCK_START,
     PlanFreshness,
     PlanStatus,
-    WeeklyPlan,
     direction,
     is_bullish_buy_plan,
     normalize_decision,

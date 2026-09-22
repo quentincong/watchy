@@ -9,7 +9,7 @@ from tests.fixtures_v2 import make_plan
 from watchy.config import TickerConfig, WatchyConfig
 from watchy.guards import StatusInputs, select_status
 from watchy.indicators import IndicatorBundle
-from watchy.monitor import data_is_stale, evaluate_plan, position_state_of
+from watchy.monitor import data_is_stale, position_state_of
 from watchy.plan import (
     PlanFreshness,
     PositionState,
