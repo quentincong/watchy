@@ -50,6 +50,24 @@ watchlist:
   - ticker: "CEG"
     tier2_days: ["wed"]
 
+  # --- Added: AI infrastructure expansion
+
+  # Ethernet / AI networking
+  - ticker: "ANET"
+    tier2_days: ["mon", "wed", "fri"]
+
+  # Semiconductor process control / advanced packaging
+  - ticker: "KLAC"
+    tier2_days: ["tue", "thu"]
+
+  # Custom silicon / interconnect / AI data-center
+  - ticker: "MRVL"
+    tier2_days: ["fri"]
+
+  # AI infrastructure manufacturing / networking supply chain
+  - ticker: "CLS"
+    tier2_days: ["wed"]
+
   # - "ANET"
   # - "CARR"
   # - "MOD"
