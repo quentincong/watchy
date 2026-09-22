@@ -47,6 +47,7 @@ class PlanStatus(str, Enum):
     INVALID = "invalid"          # failed validation — diagnosis only, never actionable
     SUPERSEDED = "superseded"    # replaced by a newer weekly base plan
     DEACTIVATED = "deactivated"  # manually expired/deactivated; history kept
+    INVALIDATED = "invalidated"  # thesis broken by price (or a watch-only death cross)
 
 
 class ReminderState(str, Enum):
@@ -66,6 +67,7 @@ class PlanFreshness(str, Enum):
     INVALID = "invalid"
     EXPIRED = "expired"
     NOT_YET_VALID = "not_yet_valid"
+    INVALIDATED = "invalidated"
 
 
 class Route(str, Enum):
@@ -400,6 +402,8 @@ def plan_freshness(plan: WeeklyPlan | None, session: date) -> PlanFreshness:
     """
     if plan is None:
         return PlanFreshness.MISSING
+    if plan.status == PlanStatus.INVALIDATED.value and not plan.validation_errors:
+        return PlanFreshness.INVALIDATED
     if plan.status != PlanStatus.ACTIVE.value or plan.validation_errors:
         return PlanFreshness.INVALID
     try:

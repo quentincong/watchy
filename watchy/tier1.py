@@ -70,7 +70,7 @@ def scan_ticker(
     # take-profit check, so a held ticker triggers at most one live fetch. Built
     # only when needed (a signal will run, or the take-profit gate is enabled).
     position_source: PositionSource | None = None
-    if actionable or config.take_profit.enabled:
+    if actionable or config.take_profit.enabled or config.weekly_mode:
         position_source = get_position_source(config)
 
     pipeline_ran = False
@@ -97,9 +97,42 @@ def scan_ticker(
         position_source, pipeline_ran,
     )
 
+    if config.weekly_mode:
+        # Watchy 2.0: deterministic weekly-plan reminders (no LLM).
+        _monitor_plan(ticker, bundle, config, store, notifier, position_source)
+
     _update_state(store, bundle, ticker, take_profit_zone=tp_zone, quantity=tp_qty)
     logger.info("Tier 1 scan complete: %s — signals: %s", ticker, actionable)
     return actionable
+
+
+def _monitor_plan(
+    ticker: str,
+    bundle: IndicatorBundle,
+    config: WatchyConfig,
+    store: StateStore,
+    notifier: TelegramNotifier,
+    position_source: PositionSource | None,
+) -> None:
+    """Plan-level reminders on state transitions; never breaks the scan."""
+    from watchy import monitor
+    from watchy.plan import ReminderState
+
+    try:
+        ev = monitor.evaluate_plan(ticker, bundle, config, store)
+        pstate = monitor.position_state_of(position_source, ticker)
+        if ev.transition is not None and ev.transition.notify:
+            status, text = monitor.build_reminder(
+                ev, pstate, why_now=[ev.transition.reason],
+                stale_move_atr=config.weekly_plan.stale_move_atr,
+            )
+            notifier.send(text)
+            logger.info("PLAN_REMINDER %s state=%s status=%s", ticker, ev.state, status.value)
+        monitor.persist_reminder(store, ev)
+        if ev.state == ReminderState.INVALIDATED:
+            monitor.invalidate_if_broken(store, ev, "price below invalidation level")
+    except Exception:  # noqa: BLE001
+        logger.exception("Plan monitoring failed for %s", ticker)
 
 
 def _nullcontext():

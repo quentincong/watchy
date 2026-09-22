@@ -510,3 +510,15 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   analysis the plan came from. The weekly card (`watchy/messages.py`) is appended to the advice
   message; one batch alert lists tickers without a valid plan. Until the Phase 5 guards land, every
   weekly card is labelled `INFORMATION ONLY`.
+- **Phase 3 — Plan monitoring: done.** `watchy/plan_monitor.py` classifies price against the plan
+  (precedence: invalidated > take-profit/resistance > above chase > in buy zone > approaching from
+  above within `approach_atr`·ATR > outside; below the zone but above invalidation reads *outside*)
+  and detects transitions against the persisted `plan_reminder_state`. Only entering a material
+  state, or leaving the buy zone, notifies; a new plan re-arms; the same reminder is not repeated
+  within `weekly_plan.renotify_h` (boundary flapping). `watchy/guards.select_status` picks the
+  deterministic status (a mechanical reminder is never `ACT NOW`); `watchy/monitor.py` sends the
+  Notify Only card. **Deviation (conservative):** crossing the invalidation level withdraws the plan
+  (`status = invalidated`, history kept) for held as well as watch-only tickers, so no later scan
+  can emit entry guidance from a broken thesis; held tickers additionally route to Triggered Risk
+  (Phase 4). Stale market data (no fetch time, older than `market_data_max_age_min`, or a previous
+  session's bar) forces `STALE — RECHECK REQUIRED`.

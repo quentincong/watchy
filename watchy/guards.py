@@ -1,0 +1,173 @@
+"""Watchy 2.0 safety guards — deterministic status selection and wording.
+
+Pure functions. The Telegram status is decided here from price, plan, data
+freshness, route and (when an analysis ran) the advisor and upstream verdict.
+The LLM may supply reasoning but can never override these guards:
+
+* stale market data, an expired/missing/invalid plan, or a price that moved
+  past ``stale_move_atr`` since the analysis can never read as actionable;
+* a price above the chase ceiling is ``DO NOT CHASE`` whatever the advice;
+* a price beyond invalidation is ``PLAN INVALID`` / ``RISK REVIEW``;
+* a verdict/advisor conflict is shown for human review, never ``ACT NOW``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from watchy.plan import (
+    PlanFreshness,
+    PositionState,
+    ReminderState,
+    Route,
+    TelegramStatus,
+    WeeklyPlan,
+    direction,
+    is_bullish_buy_plan,
+)
+
+
+@dataclass
+class StatusInputs:
+    position_state: PositionState
+    freshness: PlanFreshness
+    plan_state: ReminderState | None = None
+    plan: WeeklyPlan | None = None
+    data_stale: bool = False
+    route: Route = Route.NOTIFY_ONLY
+    risk_trigger: bool = False
+    advisor_decision: str = ""
+    advisor_urgency: str = ""
+    alignment: str = ""
+    price_moved_atr: float | None = None
+    stale_move_atr: float = 0.5
+
+
+def select_status(inp: StatusInputs) -> TelegramStatus:
+    """The one deterministic Telegram status for a message (see module doc)."""
+    held_or_unknown = inp.position_state != PositionState.WATCH
+    if inp.data_stale:
+        return TelegramStatus.STALE
+    if inp.plan_state == ReminderState.INVALIDATED or inp.freshness == PlanFreshness.INVALIDATED:
+        return TelegramStatus.RISK_REVIEW if held_or_unknown else TelegramStatus.PLAN_INVALID
+    if inp.route == Route.TRIGGERED_RISK or (inp.risk_trigger and held_or_unknown):
+        return TelegramStatus.RISK_REVIEW
+    analysed = bool(inp.advisor_decision)
+    if (
+        analysed
+        and inp.price_moved_atr is not None
+        and inp.price_moved_atr > inp.stale_move_atr
+    ):
+        return TelegramStatus.STALE
+    if inp.freshness == PlanFreshness.EXPIRED or inp.plan_state == ReminderState.EXPIRED:
+        return TelegramStatus.STALE
+    if inp.freshness != PlanFreshness.ACTIVE:
+        return TelegramStatus.INFORMATION_ONLY
+
+    advisor_dir = direction(inp.advisor_decision)
+    bullish_plan = is_bullish_buy_plan(inp.plan)
+    if inp.plan_state == ReminderState.ABOVE_CHASE and (bullish_plan or advisor_dir == "bullish"):
+        return TelegramStatus.DO_NOT_CHASE
+    if inp.alignment == "conflict":
+        return TelegramStatus.INFORMATION_ONLY
+
+    if analysed:
+        if advisor_dir == "bullish":
+            if not bullish_plan:
+                return TelegramStatus.INFORMATION_ONLY
+            if inp.plan_state == ReminderState.IN_BUY_ZONE:
+                if inp.advisor_urgency == "HIGH" and inp.alignment == "agree":
+                    return TelegramStatus.ACT_NOW
+                return TelegramStatus.WAIT_FOR_LIMIT
+            if inp.plan_state == ReminderState.APPROACHING_BUY:
+                return TelegramStatus.WAIT_FOR_LIMIT
+            return TelegramStatus.INFORMATION_ONLY
+        if advisor_dir == "bearish":
+            if inp.position_state != PositionState.HELD:
+                return TelegramStatus.INFORMATION_ONLY
+            if inp.advisor_urgency == "HIGH" and inp.alignment == "agree":
+                return TelegramStatus.ACT_NOW
+            return TelegramStatus.WAIT_FOR_LIMIT
+        return TelegramStatus.INFORMATION_ONLY
+
+    # Tier 1 mechanical reminder — never ACT NOW without a fresh analysis.
+    if bullish_plan and inp.plan_state in (ReminderState.IN_BUY_ZONE, ReminderState.APPROACHING_BUY):
+        return TelegramStatus.WAIT_FOR_LIMIT
+    if (
+        inp.plan_state == ReminderState.IN_TAKE_PROFIT
+        and inp.position_state == PositionState.HELD
+        and inp.plan is not None
+        and inp.plan.take_profit_price is not None
+    ):
+        return TelegramStatus.WAIT_FOR_LIMIT
+    return TelegramStatus.INFORMATION_ONLY
+
+
+def _m(v: float | None) -> str:
+    return f"${v:,.2f}" if v is not None else "n/a"
+
+
+def reminder_wording(
+    plan: WeeklyPlan | None,
+    state: ReminderState | None,
+    transition_kind: str,
+    position_state: PositionState,
+    price: float | None,
+) -> tuple[str, str]:
+    """Deterministic (guidance, do-not) text for a Notify Only reminder."""
+    if plan is None or state is None:
+        return (
+            "no valid weekly plan — treat this as information only",
+            "do not open or add a position from this alert alone",
+        )
+    dont = plan.dont_do or (
+        f"do not chase above {_m(plan.chase_ceiling)}" if plan.chase_ceiling else ""
+    )
+    held = position_state == PositionState.HELD
+    if state == ReminderState.EXPIRED:
+        return (
+            f"the weekly plan expired after {plan.expires_after_session}; its levels are "
+            "history until the next Weekly Full succeeds",
+            "do not act on last week's levels",
+        )
+    if state == ReminderState.INVALIDATED:
+        return (
+            f"price {_m(price)} is below the invalidation level {_m(plan.invalidation_level)} — "
+            + ("review the position and your stop" if held or position_state == PositionState.UNKNOWN
+               else "the watch thesis is broken; the plan is withdrawn"),
+            "do not enter or add while the plan is invalid",
+        )
+    if state == ReminderState.ABOVE_CHASE:
+        return (
+            f"price {_m(price)} is above the chase ceiling {_m(plan.chase_ceiling)} — "
+            "wait for a pullback into the plan or let it go",
+            dont or f"do not chase above {_m(plan.chase_ceiling)}",
+        )
+    if state == ReminderState.IN_BUY_ZONE:
+        return (
+            (plan.guidance or "the planned entry zone is reached")
+            + f" (buy zone {_m(plan.buy_zone_low)}–{_m(plan.buy_zone_high)})",
+            dont,
+        )
+    if state == ReminderState.APPROACHING_BUY:
+        return (
+            f"price is approaching the buy zone {_m(plan.buy_zone_low)}–{_m(plan.buy_zone_high)}; "
+            "prepare a limit order inside the zone if the thesis still fits your portfolio",
+            dont,
+        )
+    if state == ReminderState.IN_TAKE_PROFIT:
+        tp = plan.take_profit_price
+        if held:
+            text = "price reached the plan's resistance / take-profit territory"
+            text += f" — consider keeping a sell-limit near {_m(tp)}" if tp else " — review the trim condition"
+            if plan.trim_condition:
+                text += f"; trim condition: {plan.trim_condition}"
+            return text, dont
+        return "price reached resistance — no entry here", dont or "do not buy into resistance"
+    if transition_kind == "left_buy_zone":
+        return (
+            "price left the buy zone; a resting limit inside the zone may not fill — "
+            "no chase needed",
+            dont,
+        )
+    return plan.guidance, dont

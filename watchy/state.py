@@ -544,6 +544,18 @@ class StateStore:
             (ticker.upper(), kind),
         )
 
+    def get_current_plan(self, ticker: str) -> Any:
+        """The weekly base plan Tier 1 should reason about: the newest one that
+        was ever activated (active, invalidated or deactivated), so a plan that
+        was invalidated this week is shown as such instead of vanishing.
+        Superseded and never-valid rows are skipped."""
+        return self._one_plan(
+            "WHERE ticker = ? AND kind = 'weekly_base' "
+            "AND status IN ('active', 'invalidated', 'deactivated') "
+            "ORDER BY id DESC LIMIT 1",
+            (ticker.upper(),),
+        )
+
     def get_latest_plan(self, ticker: str, kind: str = "weekly_base") -> Any:
         """Latest row of a kind regardless of status (e.g. a failed refresh)."""
         return self._one_plan(
@@ -574,13 +586,20 @@ class StateStore:
             return self._plans("WHERE created_ts >= ? ORDER BY id ASC", (since_ts,))
         return self._plans("ORDER BY id ASC", ())
 
-    def deactivate_plan(self, plan_id: int) -> bool:
-        """Manually expire a plan without deleting its history."""
+    def deactivate_plan(self, plan_id: int, status: str = "deactivated") -> bool:
+        """Take a plan out of force without deleting its history.
+
+        ``deactivated`` = manual expiry; ``invalidated`` = the thesis broke
+        (price crossed invalidation, or a watch-only death cross). Either way
+        the row stays, and so does every older row.
+        """
+        if status not in ("deactivated", "invalidated"):
+            raise ValueError(f"unsupported plan status {status!r}")
         with self._lock:
             cur = self._conn.execute(
-                "UPDATE analysis_plan SET status = 'deactivated', deactivated_ts = ? "
+                "UPDATE analysis_plan SET status = ?, deactivated_ts = ? "
                 "WHERE id = ? AND status = 'active'",
-                (_now_iso(), plan_id),
+                (status, _now_iso(), plan_id),
             )
             self._conn.commit()
             return cur.rowcount > 0

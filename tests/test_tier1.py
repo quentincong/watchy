@@ -22,7 +22,12 @@ def _bundle(price: float) -> IndicatorBundle:
 
 
 def _config(**ticker_kwargs) -> WatchyConfig:
-    return WatchyConfig(watchlist=[TickerConfig(ticker="AAPL", **ticker_kwargs)])
+    # The 1.x Tier 1 path (paid signal rescans) is the tier2_schedule=daily
+    # rollback; Watchy 2.0 routing is covered in test_monitor / test_router.
+    return WatchyConfig(
+        watchlist=[TickerConfig(ticker="AAPL", **ticker_kwargs)],
+        tier2_schedule="daily",
+    )
 
 
 class TestScanAlwaysRuns:
@@ -107,10 +112,13 @@ class TestRescanCap:
 class TestTakeProfitZone:
     """Tier 1 take-profit zone-entry trigger (#28)."""
 
+    schedule = "daily"
+
     def _config(self, enabled=True, floor=10.0):
         return WatchyConfig(
             watchlist=[TickerConfig(ticker="AAPL")],
             take_profit=TakeProfitConfig(enabled=enabled, floor_gain_pct=floor),
+            tier2_schedule=self.schedule,
         )
 
     def _held(self, gain_pct, quantity=3):
@@ -199,6 +207,7 @@ class TestTakeProfitRearmOnFill:
     share count is the fill, so it re-arms.
     """
 
+    schedule = "daily"
     _config = TestTakeProfitZone._config
     _held = TestTakeProfitZone._held
     _scan = TestTakeProfitZone._scan
