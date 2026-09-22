@@ -55,6 +55,17 @@ def scan_ticker(
         return []
 
     prev = store.get_ticker_state(ticker)
+
+    if config.weekly_mode:
+        # Watchy 2.0: plan monitoring + deterministic trigger routing. The 1.x
+        # path below (paid rescan per signal) is the tier2_schedule=daily rollback.
+        from watchy.monitor import scan_planned
+
+        return scan_planned(
+            ticker, bundle, prev, config, store, notifier,
+            pipeline_runner=pipeline_runner, ticker_locks=ticker_locks,
+        )
+
     fired_signals = detect_signals(bundle, prev)
 
     # filter out signals still in cooldown
@@ -70,7 +81,7 @@ def scan_ticker(
     # take-profit check, so a held ticker triggers at most one live fetch. Built
     # only when needed (a signal will run, or the take-profit gate is enabled).
     position_source: PositionSource | None = None
-    if actionable or config.take_profit.enabled or config.weekly_mode:
+    if actionable or config.take_profit.enabled:
         position_source = get_position_source(config)
 
     pipeline_ran = False
@@ -97,42 +108,9 @@ def scan_ticker(
         position_source, pipeline_ran,
     )
 
-    if config.weekly_mode:
-        # Watchy 2.0: deterministic weekly-plan reminders (no LLM).
-        _monitor_plan(ticker, bundle, config, store, notifier, position_source)
-
     _update_state(store, bundle, ticker, take_profit_zone=tp_zone, quantity=tp_qty)
     logger.info("Tier 1 scan complete: %s — signals: %s", ticker, actionable)
     return actionable
-
-
-def _monitor_plan(
-    ticker: str,
-    bundle: IndicatorBundle,
-    config: WatchyConfig,
-    store: StateStore,
-    notifier: TelegramNotifier,
-    position_source: PositionSource | None,
-) -> None:
-    """Plan-level reminders on state transitions; never breaks the scan."""
-    from watchy import monitor
-    from watchy.plan import ReminderState
-
-    try:
-        ev = monitor.evaluate_plan(ticker, bundle, config, store)
-        pstate = monitor.position_state_of(position_source, ticker)
-        if ev.transition is not None and ev.transition.notify:
-            status, text = monitor.build_reminder(
-                ev, pstate, why_now=[ev.transition.reason],
-                stale_move_atr=config.weekly_plan.stale_move_atr,
-            )
-            notifier.send(text)
-            logger.info("PLAN_REMINDER %s state=%s status=%s", ticker, ev.state, status.value)
-        monitor.persist_reminder(store, ev)
-        if ev.state == ReminderState.INVALIDATED:
-            monitor.invalidate_if_broken(store, ev, "price below invalidation level")
-    except Exception:  # noqa: BLE001
-        logger.exception("Plan monitoring failed for %s", ticker)
 
 
 def _nullcontext():
@@ -265,14 +243,36 @@ def _check_take_profit_zone(
     untouched). Fires an advisor-only take-profit call on the transition INTO
     the zone, and again after a fill; other steady-state advice is Tier 2's job.
     """
+    zone, qty, fire, gain = _take_profit_decision(
+        ticker, prev, config, store, position_source, pipeline_ran,
+    )
+    if fire:
+        _fire_take_profit(ticker, bundle, config, store, notifier, position_source, gain)
+    return zone, qty
+
+
+def _take_profit_decision(
+    ticker: str,
+    prev: dict[str, Any],
+    config: WatchyConfig,
+    store: StateStore,
+    position_source: PositionSource | None,
+    pipeline_ran: bool,
+) -> tuple[int | None, float | None, bool, float | None]:
+    """The #28 gate's decision without side effects beyond logging.
+
+    Returns ``(zone, quantity, fire, gain)``. Split out of
+    _check_take_profit_zone so the Watchy 2.0 router can see "take-profit would
+    fire" before choosing a route; the firing rules themselves are unchanged.
+    """
     if not config.take_profit.enabled or position_source is None:
-        return None, None
+        return None, None, False, None
 
     try:
         pos = position_source.get_position(ticker)
     except Exception:  # noqa: BLE001
         logger.warning("take-profit: position lookup failed for %s", ticker, exc_info=True)
-        return None, None
+        return None, None, False, None
 
     # Record the count even below the floor, so a sell made while out of the
     # zone can't be mistaken for a fresh fill on the next entry into it.
@@ -282,7 +282,7 @@ def _check_take_profit_zone(
     floor = tpmod.effective_floor_pct(config.get_ticker_config(ticker), config)
     in_zone = tpmod.is_in_zone(gain, floor)
     if not in_zone:
-        return 0, qty
+        return 0, qty, False, gain
 
     # A drop in share count means the standing sell-limit filled, leaving the
     # position unprotected — re-arm even though the zone flag is still set. Under
@@ -294,21 +294,20 @@ def _check_take_profit_zone(
     if prev_zone and not trimmed:
         # Already in the zone last scan → steady state; the daily Tier 2 run
         # re-advises with the same directive, no intraday call needed.
-        return 1, qty
+        return 1, qty, False, gain
     if pipeline_ran:
         # A technical signal already ran the advisor this scan with the
         # take-profit directive injected — don't fire a second call.
-        return 1, qty
+        return 1, qty, False, gain
     if store.is_in_cooldown(ticker, "take_profit_zone", config.take_profit.cooldown_h):
-        return 1, qty
+        return 1, qty, False, gain
 
     if trimmed:
         logger.info(
             "Take-profit re-arm for %s: shares %s → %s (fill), zone still active",
             ticker, prev.get("prev_quantity"), qty,
         )
-    _fire_take_profit(ticker, bundle, config, store, notifier, position_source, gain)
-    return 1, qty
+    return 1, qty, True, gain
 
 
 def _fire_take_profit(

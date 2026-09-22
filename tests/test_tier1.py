@@ -139,6 +139,10 @@ class TestTakeProfitZone:
             state["prev_quantity"] = prev_qty
         store.get_ticker_state.return_value = state
         store.is_in_cooldown.return_value = in_cooldown
+        # Watchy 2.0 weekly mode reads these too; inert in daily mode.
+        store.get_current_plan.return_value = None
+        store.get_reminder_state.return_value = {}
+        store.count_triggered.return_value = 0
         src = MagicMock()
         src.get_position.return_value = None if gain is None else self._held(gain, qty)
         src.format_position_context.return_value = "Current position in AAPL"
@@ -274,6 +278,18 @@ class TestTakeProfitRearmOnFill:
         )
         adv.assert_not_called()
         assert store.save_ticker_state.call_args.kwargs["prev_quantity"] == 0.0
+
+
+class TestTakeProfitZoneWeekly(TestTakeProfitZone):
+    """Take-profit regression (Watchy 2.0): the whole #28 zone-entry suite
+    re-run through the weekly-mode router — the gate, cooldown, and advisor
+    call must behave exactly as in 1.x."""
+
+    schedule = "weekly"
+
+
+class TestTakeProfitRearmOnFillWeekly(TestTakeProfitRearmOnFill):
+    schedule = "weekly"
 
 
 class TestAdviceLogWiring:

@@ -158,9 +158,11 @@ def build_reminder(
     mode: str = "Tier 1 plan reminder; no new LLM analysis",
     notes: list[str] | None = None,
     stale_move_atr: float = 0.5,
+    interpretation_pending: bool = False,
 ) -> tuple[TelegramStatus, str]:
     """Deterministic status + rendered Notify Only message."""
     status = select_status(StatusInputs(
+        interpretation_pending=interpretation_pending,
         position_state=position_state,
         freshness=ev.freshness,
         plan_state=ev.state,
@@ -198,3 +200,174 @@ def build_reminder(
         notes=msg_notes,
     )
     return status, render_plan_card(ctx)
+
+
+# --- Watchy 2.0 Tier 1 scan (weekly mode) ----------------------------------
+
+_DOWNGRADE_NOTES = {
+    "disabled": "Shadow mode: paid analysis is disabled — would have run {route}",
+    "not_allowed": "{route} not run: ticker is not enabled for paid analysis",
+    "input_missing": "{route} not run: no valid weekly plan/digest — Notify Only fallback",
+    "budget_exhausted": "{route} not run: paid-analysis budget exhausted for this session",
+    "unavailable": "{route} not run: paid analysis unavailable",
+}
+
+
+def scan_planned(
+    ticker: str,
+    bundle: Any,
+    prev: dict[str, Any],
+    config: Any,
+    store: Any,
+    notifier: Any,
+    *,
+    pipeline_runner: Any = None,
+    ticker_locks: Any = None,
+    now: datetime | None = None,
+) -> list[str]:
+    """One Watchy 2.0 Tier 1 evaluation: triggers → one route → one action.
+
+    Technical signals, plan transitions and the take-profit gate are collected,
+    routed by the pure router, and at most one analysis runs. Every evaluation
+    writes a structured ROUTE record (journal + route_log table).
+    """
+    import json
+    import time
+
+    from watchy import tier1 as t1
+    from watchy.orchestrator import get_cooldown_hours
+    from watchy.router import RouterInput, route
+
+    now = now or datetime.now(timezone.utc)
+    started = time.monotonic()
+    fired = t1.detect_signals(bundle, prev)
+    actionable: list[str] = []
+    cooled: list[str] = []
+    for sig in fired:
+        if store.is_in_cooldown(ticker, sig, get_cooldown_hours(sig, config.cooldown)):
+            cooled.append(sig)
+        else:
+            actionable.append(sig)
+    details = t1._bundle_summary(bundle)
+    for sig in actionable:
+        store.log_signal(ticker, sig, details)   # arms the per-signal cooldown
+
+    position_source = t1.get_position_source(config)
+    pstate = position_state_of(position_source, ticker)
+    tp_zone, tp_qty, tp_fire, tp_gain = t1._take_profit_decision(
+        ticker, prev, config, store, position_source, False,
+    )
+
+    ev = evaluate_plan(ticker, bundle, config, store, now)
+    transition = ev.transition.kind if ev.transition is not None and ev.transition.notify else ""
+    ta = config.triggered_analysis
+    allowed = not ta.tickers or ticker.upper() in {t.upper() for t in ta.tickers}
+    decision = route(RouterInput(
+        ticker=ticker,
+        position_state=pstate,
+        plan=ev.plan,
+        freshness=ev.freshness,
+        plan_state=ev.state,
+        plan_transition=transition,
+        signals=actionable,
+        cooled_down=cooled,
+        price=ev.price,
+        prev_close=getattr(bundle, "prev_close", None),
+        atr=ev.atr,
+        take_profit_fire=tp_fire,
+        triggered_enabled=ta.enabled,
+        ticker_allowed=allowed,
+        digest_available=weekly_digest_available(ticker),
+        budget_ticker_used=store.count_triggered(ev.session, ticker),
+        budget_global_used=store.count_triggered(ev.session),
+        max_per_ticker=ta.max_per_ticker_per_trading_day,
+        max_global=ta.max_global_per_trading_day,
+        bearish_shock_atr=ta.bearish_shock_atr,
+    ))
+
+    record: dict[str, Any] = {
+        "evaluated_ts": now.isoformat(),
+        "session": ev.session,
+        "ticker": ticker.upper(),
+        "position_state": pstate.value,
+        "triggers": fired,
+        "cooled_down": cooled,
+        "plan_id": ev.plan.id if ev.plan else None,
+        "plan_freshness": ev.freshness.value,
+        "plan_state": ev.state.value if ev.state else None,
+        "plan_transition": ev.transition.kind if ev.transition else None,
+        "price": ev.price,
+        "prev_close": getattr(bundle, "prev_close", None),
+        "atr": ev.atr,
+        "price_ts": ev.price_ts.isoformat() if ev.price_ts else None,
+        "data_stale": ev.data_stale,
+        "take_profit_fire": tp_fire,
+        **{k: v for k, v in decision.to_dict().items() if k != "candidates"},
+        "candidates": decision.to_dict()["candidates"],
+        "llm_invoked": False,
+        "status": None,
+        "notified": False,
+    }
+
+    effective = decision.effective_route
+    if effective == Route.TAKE_PROFIT:
+        t1._fire_take_profit(ticker, bundle, config, store, notifier, position_source, tp_gain)
+        record["llm_invoked"] = True
+        record["status"] = "take_profit_alert"
+        record["notified"] = True
+
+    if effective in (Route.FAST_RECHECK, Route.TRIGGERED_RISK):
+        from watchy import triggered
+
+        outcome = triggered.execute(
+            decision, ev, pstate, bundle, config, store, notifier, position_source,
+            pipeline_runner=pipeline_runner, ticker_locks=ticker_locks, now=now,
+        )
+        record.update(outcome)
+        effective = Route(outcome.get("effective_route", effective.value))
+
+    if effective == Route.NOTIFY_ONLY and record["status"] is None:
+        shown = ev
+        if decision.invalidate_plan:
+            from dataclasses import replace
+
+            shown = replace(ev, freshness=PlanFreshness.INVALIDATED)
+        notes = []
+        budget = record.get("budget_result", decision.budget_result)
+        if decision.route != Route.NOTIFY_ONLY and budget in _DOWNGRADE_NOTES:
+            notes.append(_DOWNGRADE_NOTES[budget].format(
+                route=decision.route.value.replace("_", " ").title()))
+        if record.get("analysis_error"):
+            notes.append(f"analysis failed: {record['analysis_error']}")
+        status, text = build_reminder(
+            shown, pstate,
+            why_now=decision.reasons,
+            route=decision.route,
+            risk_trigger=decision.risk,
+            notes=notes,
+            stale_move_atr=config.weekly_plan.stale_move_atr,
+            interpretation_pending=decision.route in (Route.FAST_RECHECK, Route.TRIGGERED_RISK),
+        )
+        record["status"] = status.value
+        record["notified"] = bool(notifier.send(text))
+    if decision.invalidate_plan:
+        invalidate_if_broken(store, ev, "; ".join(decision.reasons))
+
+    persist_reminder(store, ev)
+    t1._update_state(store, bundle, ticker, take_profit_zone=tp_zone, quantity=tp_qty)
+    record["latency_s"] = round(time.monotonic() - started, 3)
+    try:
+        store.log_route(record)
+    except Exception:  # noqa: BLE001
+        logger.exception("route_log write failed for %s", ticker)
+    logger.info("ROUTE %s", json.dumps(record, default=str, separators=(",", ":")))
+    return actionable
+
+
+def weekly_digest_available(ticker: str) -> bool:
+    from watchy.digest_store import _path
+
+    try:
+        return _path(ticker, kind="weekly").exists()
+    except Exception:  # noqa: BLE001
+        return False

@@ -522,3 +522,16 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   can emit entry guidance from a broken thesis; held tickers additionally route to Triggered Risk
   (Phase 4). Stale market data (no fetch time, older than `market_data_max_age_min`, or a previous
   session's bar) forces `STALE — RECHECK REQUIRED`.
+- **Phase 4 — Pure trigger router: done.** `watchy/router.py::route()` implements §7's matrix and
+  priority (invalidation-driven Triggered Risk ranks with TAKE_PROFIT; take-profit wins the tie so
+  the existing path is preserved), keeps every reason, and records rejected/superseded alternatives
+  and cooled-down triggers. Paid routes are downgraded to Notify Only when disabled (shadow), not on
+  the `triggered_analysis.tickers` allow-list, Fast Recheck inputs are missing, or a budget is spent.
+  In weekly mode Tier 1 runs `monitor.scan_planned` (the 1.x paid-rescan path remains for
+  `tier2_schedule: daily`); the #28 gate was split into `_take_profit_decision` +
+  `_fire_take_profit` with unchanged rules, and the whole take-profit test suite also runs through
+  the weekly router. Every evaluation writes a `ROUTE {json}` journal line and a `route_log` row.
+  **Additions to the matrix (documented choices):** `rsi_oversold` follows the Bollinger-lower row;
+  a volume/ATR anomaly *without* a negative move is Notify Only; unknown position state uses the
+  held (risk-side) rules, as the 1.x Tier 2 gate did; when a wanted interpretation did not run
+  (shadow, budget, missing input) the reminder's entry wording is capped at `INFORMATION ONLY`.

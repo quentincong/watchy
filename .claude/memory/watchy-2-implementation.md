@@ -27,6 +27,12 @@ sync with new prompt slots (`event_context`, `plan_instructions`).
 it after the take-profit check. Grep `PLAN_REMINDER` / `PLAN_INVALIDATED`. Legacy Tier 1 tests are
 pinned to `tier2_schedule="daily"` (they cover the rollback path).
 
+**Phase 4 (router)** — `router.route(RouterInput) -> RouteDecision` (pure). Weekly-mode Tier 1 =
+`monitor.scan_planned` (dispatched from `tier1.scan_ticker`); the 1.x path below it is the daily
+rollback. `tier1._take_profit_decision` (pure-ish) + `_fire_take_profit`; take-profit tests run in
+both modes (`TestTakeProfitZoneWeekly`). Every scan → `ROUTE {json}` + `route_log` row. Paid routes
+reserve budget in `triggered.py` (Phases 6–7).
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on
@@ -38,7 +44,11 @@ Design decisions worth remembering:
   than the spec's table (which only says watch-only), chosen so a broken thesis can never produce a
   later entry reminder. `store.get_current_plan()` returns active/invalidated/deactivated rows so the
   UI can say "invalidated" instead of "no plan".
-- A mechanical (no-LLM) reminder can never be `ACT NOW`; best case is `WAIT FOR LIMIT`.
+- A mechanical (no-LLM) reminder can never be `ACT NOW`; best case is `WAIT FOR LIMIT`. If the
+  router wanted an interpretation that didn't run (shadow/budget/input missing/failure), entry
+  wording is capped at `INFORMATION ONLY` (`StatusInputs.interpretation_pending`).
+- Matrix gaps filled: `rsi_oversold` = Bollinger-lower row; volume/ATR anomaly w/o negative move =
+  Notify Only; UNKNOWN position = held rules (conservative, like the 1.x Tier 2 gate).
 - Levels outside 0.5×–2× the input price are rejected as implausible.
 - Config: `tier2_schedule` (weekly default; `daily` = exact 1.x behaviour = rollback),
   `weekly_plan.*`, `triggered_analysis.*` (enabled:false = shadow).

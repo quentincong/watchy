@@ -41,10 +41,24 @@ class StatusInputs:
     alignment: str = ""
     price_moved_atr: float | None = None
     stale_move_atr: float = 0.5
+    # The router wanted an interpretation (Fast Recheck / Triggered Risk) that
+    # did not run — shadow mode, budget, missing inputs or a failure. Without
+    # it an entry status would rest on a mechanical reading of a changed
+    # situation, so entry wording is capped at INFORMATION ONLY.
+    interpretation_pending: bool = False
 
 
 def select_status(inp: StatusInputs) -> TelegramStatus:
     """The one deterministic Telegram status for a message (see module doc)."""
+    status = _select_status(inp)
+    if inp.interpretation_pending and status in (
+        TelegramStatus.ACT_NOW, TelegramStatus.WAIT_FOR_LIMIT,
+    ):
+        return TelegramStatus.INFORMATION_ONLY
+    return status
+
+
+def _select_status(inp: StatusInputs) -> TelegramStatus:
     held_or_unknown = inp.position_state != PositionState.WATCH
     if inp.data_stale:
         return TelegramStatus.STALE
