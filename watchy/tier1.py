@@ -346,6 +346,10 @@ def _fire_take_profit(
 def _bundle_summary(bundle: IndicatorBundle) -> dict[str, Any]:
     return {
         "current_price": bundle.current_price,
+        # Watchy 2.0: kept so the zero-cost replay can recompute the session
+        # move (bearish-shock test) from signal_log alone.
+        "prev_close": bundle.prev_close,
+        "avg_atr_20d": bundle.avg_atr_20d,
         "sma_50": bundle.sma_50,
         "sma_200": bundle.sma_200,
         "rsi": bundle.rsi,

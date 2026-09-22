@@ -609,32 +609,11 @@ class StateStore:
         return rows[0] if rows else None
 
     def _plans(self, where: str, params: tuple) -> list[Any]:
-        from watchy.plan import WeeklyPlan
-
         with self._lock:
             cur = self._conn.execute(f"SELECT * FROM analysis_plan {where}", params)
             cols = [d[0] for d in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-        plans = []
-        for row in rows:
-            kwargs = {
-                k: row[k] for k in WeeklyPlan.__dataclass_fields__
-                if k in row and k not in (
-                    "source_ref", "validation_errors", "validation_warnings",
-                )
-            }
-            for k in ("thesis", "invalidation_condition", "trim_condition",
-                      "guidance", "dont_do", "upstream_verdict", "decision",
-                      "urgency", "input_price_ts", "valid_from_session",
-                      "expires_after_session"):
-                if kwargs.get(k) is None:
-                    kwargs[k] = ""
-            plan = WeeklyPlan(**kwargs)
-            plan.source_ref = _loads(row.get("source_ref"), {})
-            plan.validation_errors = _loads(row.get("validation_errors"), [])
-            plan.validation_warnings = _loads(row.get("validation_warnings"), [])
-            plans.append(plan)
-        return plans
+        return [row_to_plan(row) for row in rows]
 
     # --- Watchy 2.0: reminder state ---
 
@@ -800,3 +779,24 @@ def _loads(text: str | None, default: Any) -> Any:
         return json.loads(text)
     except (TypeError, ValueError):
         return default
+
+
+def row_to_plan(row: dict[str, Any]) -> Any:
+    """An analysis_plan row (as a dict) → WeeklyPlan. Shared with the
+    read-only replay reader so both decode plans identically."""
+    from watchy.plan import WeeklyPlan
+
+    kwargs = {
+        k: row[k] for k in WeeklyPlan.__dataclass_fields__
+        if k in row and k not in ("source_ref", "validation_errors", "validation_warnings")
+    }
+    for k in ("thesis", "invalidation_condition", "trim_condition", "guidance",
+              "dont_do", "upstream_verdict", "decision", "urgency", "input_price_ts",
+              "valid_from_session", "expires_after_session"):
+        if kwargs.get(k) is None:
+            kwargs[k] = ""
+    plan = WeeklyPlan(**kwargs)
+    plan.source_ref = _loads(row.get("source_ref"), {})
+    plan.validation_errors = _loads(row.get("validation_errors"), [])
+    plan.validation_warnings = _loads(row.get("validation_warnings"), [])
+    return plan

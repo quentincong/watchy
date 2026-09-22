@@ -559,3 +559,13 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   reminder labelled "analysis failed". Model/thinking level, components, latency, pre/post price and
   override id go into the ROUTE record; token cost stays in the existing `TOKENCOST`/`GEMINICOST`
   lines.
+- **Phase 8 — Replay and operational controls: done.** `watchy/replay.py` opens the database with
+  SQLite `mode=ro` (it cannot write), tolerates 1.x databases, groups signal rows fired within
+  120 s into one scan, infers held/watch from the advice log, and replays the router with simulated
+  per-session budgets; it re-routes every logged 2.0 `ROUTE` record as a determinism check and
+  derives dedup and time-to-leave-range statistics from the `route_log` sequence. Per-call costs are
+  explicit placeholders (`--cost-*`) to be replaced with measured `TOKENCOST`/`GEMINICOST` figures.
+  An exported research CSV is read only when passed explicitly; `--out` refuses paths inside the
+  repository. `scripts/watchy_ctl.py` (`watchy/ctl.py`) provides `status`, `plan show|history|expire`,
+  dry `route` / `preview` (no LLM, no Telegram, no writes), `weekly TICKER --yes` (paid force) and
+  `replay`. Schedule and enablement switches stay configuration edits + restart, as §15 requires.

@@ -45,6 +45,12 @@ atomic `try_reserve_triggered` (keyed by session), FR = advisor on `load_digest(
 `build_override` copies base levels (advisor can't move boundaries), guards after
 `fetch_live_price`. Grep `TRIGGERED`. Committed together (shared module).
 
+**Phase 8 (replay + controls)** — `watchy/replay.py` (`ReadOnlyStore` = sqlite `mode=ro`; 1.x-db
+tolerant; `reroute_logged` determinism check), `watchy/ctl.py` + `scripts/watchy_ctl.py`
+(status / plan show|history|expire / route / preview / weekly --yes / replay). Replay costs are
+placeholders ($0.01 FR, $0.06 TR) — re-measure before quoting. `tier1._bundle_summary` now logs
+`prev_close` + `avg_atr_20d` into signal_log so future replays can recompute the shock test.
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on
