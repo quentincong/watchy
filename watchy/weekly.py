@@ -147,10 +147,26 @@ def render_weekly_card(
     result: dict[str, Any],
     bundle: Any,
     now: datetime,
+    *,
+    held: bool | None = None,
+    post_price: float | None = None,
+    post_ts: datetime | None = None,
+    stale_move_atr: float = 0.5,
+    approach_atr: float = 0.5,
+    max_age_min: float = 30.0,
 ) -> str:
-    """The expanded weekly Telegram card appended to the advice message."""
+    """The expanded weekly Telegram card appended to the advice message.
+
+    The status is deterministic: the plan is reclassified against a price
+    refreshed after the analysis finished (§9), so a move during a long batch
+    cannot leave an actionable entry on a price that has already left the
+    range. Pre-market the latest bar is the prior close; that is expected for
+    the 10:02 UTC run and does not by itself mark the card stale.
+    """
+    from watchy.guards import StatusInputs, classify_alignment, revalidate, select_status
     from watchy.messages import MessageContext, format_et, render_plan_card
-    from watchy.plan import PlanFreshness, TelegramStatus
+    from watchy.plan import PlanFreshness, PositionState
+    from watchy.take_profit import bundle_avg_atr
 
     advice = advice or {}
     notes: list[str] = []
@@ -164,21 +180,65 @@ def render_weekly_card(
         )
     else:
         freshness = PlanFreshness.ACTIVE
+
+    pre_ts = getattr(bundle, "fetched_at", None) if bundle is not None else None
+    if pre_ts is None and plan.input_price_ts:
+        try:
+            pre_ts = datetime.fromisoformat(plan.input_price_ts)
+        except ValueError:
+            pre_ts = None
+    atr = bundle_avg_atr(bundle)
+    reval = revalidate(
+        plan, freshness,
+        pre_price=plan.input_price, pre_ts=pre_ts,
+        post_price=post_price, post_ts=post_ts,
+        atr=atr, now=now, approach_atr=approach_atr, max_age_min=max_age_min,
+    )
+    if reval.reason:
+        notes.append(reval.reason)
+    if reval.moved_atr is not None and reval.moved_atr > stale_move_atr:
+        notes.append(
+            f"price moved {reval.moved_atr:.2f} ATR while the analysis ran "
+            f"(from {plan.input_price:,.2f}) — recheck before acting"
+        )
+    pstate = (
+        PositionState.HELD if held else
+        PositionState.WATCH if held is False else PositionState.UNKNOWN
+    )
+    decision = str(advice.get("decision") or "")
+    status = select_status(StatusInputs(
+        position_state=pstate,
+        freshness=freshness,
+        plan_state=reval.state,
+        plan=plan if plan.is_valid else None,
+        data_stale=reval.stale,
+        advisor_decision=decision,
+        advisor_urgency=str(advice.get("urgency") or ""),
+        verdict=plan.upstream_verdict,
+        price_moved_atr=reval.moved_atr,
+        stale_move_atr=stale_move_atr,
+    ))
     ctx = MessageContext(
         ticker=plan.ticker,
-        status=TelegramStatus.INFORMATION_ONLY,
-        price=plan.input_price,
-        price_ts=plan.input_price_ts or None,
+        status=status,
+        price=reval.price,
+        price_ts=reval.price_ts,
         why_now=["weekly full analysis for the first trading session of the week"],
         plan=plan,
         plan_freshness=freshness,
+        plan_state=reval.state,
         guidance=plan.guidance if plan.is_valid else "",
         dont_do=plan.dont_do if plan.is_valid else "",
         verdict=plan.upstream_verdict,
-        advisor_decision=str(advice.get("decision") or ""),
+        advisor_decision=decision,
         advisor_urgency=str(advice.get("urgency") or ""),
+        alignment=classify_alignment(plan.upstream_verdict, decision),
         mode="Weekly Full — full TradingAgents analysis + advisor",
         source_freshness=f"analysis completed {format_et(now)}",
         notes=notes,
+    )
+    logger.info(
+        "WEEKLY_CARD %s status=%s state=%s pre=%s post=%s moved_atr=%s",
+        plan.ticker, status.value, reval.state, plan.input_price, post_price, reval.moved_atr,
     )
     return render_plan_card(ctx)

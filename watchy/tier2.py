@@ -23,6 +23,7 @@ from watchy.digest_store import save_digest
 from watchy.indicators import IndicatorBundle, compute_indicators
 from watchy.locks import TickerLockRegistry
 from watchy.market_calendar import is_weekly_full_risk_day
+from watchy.monitor import fetch_live_price
 from watchy.notify import TelegramNotifier
 from watchy.orchestrator import (
     AnalystSet,
@@ -363,6 +364,7 @@ def _run_ticker(
                         "report_path": result.get("report_path"),
                         "digest_path": weekly_digest,
                     },
+                    config,
                 )
 
             notifier.pipeline_result(
@@ -384,6 +386,7 @@ def _weekly_plan_step(
     store: StateStore,
     now: datetime,
     source_ref: dict[str, Any],
+    config: WatchyConfig,
 ) -> str:
     """Build, validate and persist the weekly plan; return its message card."""
     bundle = entry.bundle
@@ -398,7 +401,16 @@ def _weekly_plan_step(
     pid = persist_plan(store, plan, raw_output=(advice or {}).get("_raw", ""))
     result["plan_id"] = pid
     result["plan_valid"] = plan.is_valid
-    return render_weekly_card(plan, advice, result, bundle, now)
+    # §9 post-analysis revalidation: the batch can run for hours, so re-read
+    # the price right before rendering an actionable card.
+    post_price, post_ts = fetch_live_price(entry.ticker)
+    wp = config.weekly_plan
+    return render_weekly_card(
+        plan, advice, result, bundle, datetime.now(timezone.utc),
+        held=entry.held, post_price=post_price, post_ts=post_ts,
+        stale_move_atr=wp.stale_move_atr, approach_atr=wp.approach_atr,
+        max_age_min=wp.market_data_max_age_min,
+    )
 
 
 def _effective_target(

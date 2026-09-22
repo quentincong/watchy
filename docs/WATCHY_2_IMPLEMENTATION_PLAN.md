@@ -535,3 +535,14 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   a volume/ATR anomaly *without* a negative move is Notify Only; unknown position state uses the
   held (risk-side) rules, as the 1.x Tier 2 gate did; when a wanted interpretation did not run
   (shadow, budget, missing input) the reminder's entry wording is capped at `INFORMATION ONLY`.
+- **Phase 5 — Price and conflict guards: done.** `guards.revalidate()` reclassifies the plan against
+  a price refreshed after the analysis (`monitor.fetch_live_price`, via the cached scanner fetch);
+  if the refresh fails the pre-analysis price is used only while younger than
+  `market_data_max_age_min`. `select_status` precedence: stale feed → invalidation → Triggered Risk
+  → above chase (`DO NOT CHASE`, even when the price ran there during the analysis) → moved more than
+  `stale_move_atr` → expired/missing/invalid plan → entry/exit rules. `classify_alignment` shows any
+  verdict/advisor direction difference as a conflict for human review; `entry_blocked` (verdict
+  SELL/HOLD with advisor BUY/ADD, or verdict SELL with a bullish buy plan) caps entry wording at
+  `INFORMATION ONLY`; `ACT NOW` requires `agree`, HIGH urgency, a fresh price and an executable plan
+  state. Weekly cards now carry a real status; the pre-market prior-close bar does not mark them
+  stale by itself.

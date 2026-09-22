@@ -14,6 +14,7 @@ The LLM may supply reasoning but can never override these guards:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from watchy.plan import (
     PlanFreshness,
@@ -38,7 +39,7 @@ class StatusInputs:
     risk_trigger: bool = False
     advisor_decision: str = ""
     advisor_urgency: str = ""
-    alignment: str = ""
+    verdict: str = ""                 # upstream TradingAgents verdict (BUY/SELL/HOLD)
     price_moved_atr: float | None = None
     stale_move_atr: float = 0.5
     # The router wanted an interpretation (Fast Recheck / Triggered Risk) that
@@ -58,6 +59,29 @@ def select_status(inp: StatusInputs) -> TelegramStatus:
     return status
 
 
+def classify_alignment(verdict: str | None, advisor: str | None) -> str:
+    """"agree" / "conflict" / "unknown" between the upstream verdict and the
+    advisor (or, for a mechanical reminder, the weekly plan's decision).
+
+    Any difference in direction is a conflict to show for human review; only
+    the entry-blocking subset (see ``entry_blocked``) changes the status.
+    """
+    v, a = direction(verdict), direction(advisor)
+    if not v or not a:
+        return "unknown"
+    return "agree" if v == a else "conflict"
+
+
+def entry_blocked(verdict: str | None, advisor: str | None, plan: WeeklyPlan | None) -> bool:
+    """A buy must never be presented as actionable when the upstream verdict
+    is SELL or HOLD and the advisor says BUY/ADD, or when the verdict is SELL
+    and the plan still carries a bullish buy zone."""
+    v = (verdict or "").upper()
+    if direction(advisor) == "bullish" and v in ("SELL", "HOLD"):
+        return True
+    return v == "SELL" and is_bullish_buy_plan(plan)
+
+
 def _select_status(inp: StatusInputs) -> TelegramStatus:
     held_or_unknown = inp.position_state != PositionState.WATCH
     if inp.data_stale:
@@ -67,6 +91,14 @@ def _select_status(inp: StatusInputs) -> TelegramStatus:
     if inp.route == Route.TRIGGERED_RISK or (inp.risk_trigger and held_or_unknown):
         return TelegramStatus.RISK_REVIEW
     analysed = bool(inp.advisor_decision)
+    if (
+        inp.freshness == PlanFreshness.ACTIVE
+        and inp.plan_state == ReminderState.ABOVE_CHASE
+        and (is_bullish_buy_plan(inp.plan) or direction(inp.advisor_decision) == "bullish")
+    ):
+        # Above the chase ceiling is DO NOT CHASE whatever the analysis says,
+        # including when the price ran there while the analysis was running.
+        return TelegramStatus.DO_NOT_CHASE
     if (
         analysed
         and inp.price_moved_atr is not None
@@ -80,17 +112,16 @@ def _select_status(inp: StatusInputs) -> TelegramStatus:
 
     advisor_dir = direction(inp.advisor_decision)
     bullish_plan = is_bullish_buy_plan(inp.plan)
-    if inp.plan_state == ReminderState.ABOVE_CHASE and (bullish_plan or advisor_dir == "bullish"):
-        return TelegramStatus.DO_NOT_CHASE
-    if inp.alignment == "conflict":
-        return TelegramStatus.INFORMATION_ONLY
+    proxy = inp.advisor_decision or (inp.plan.decision if inp.plan else "")
+    alignment = classify_alignment(inp.verdict, proxy)
+    blocked = entry_blocked(inp.verdict, proxy, inp.plan)
 
     if analysed:
         if advisor_dir == "bullish":
-            if not bullish_plan:
+            if blocked or not bullish_plan:
                 return TelegramStatus.INFORMATION_ONLY
             if inp.plan_state == ReminderState.IN_BUY_ZONE:
-                if inp.advisor_urgency == "HIGH" and inp.alignment == "agree":
+                if inp.advisor_urgency == "HIGH" and alignment == "agree":
                     return TelegramStatus.ACT_NOW
                 return TelegramStatus.WAIT_FOR_LIMIT
             if inp.plan_state == ReminderState.APPROACHING_BUY:
@@ -99,12 +130,14 @@ def _select_status(inp: StatusInputs) -> TelegramStatus:
         if advisor_dir == "bearish":
             if inp.position_state != PositionState.HELD:
                 return TelegramStatus.INFORMATION_ONLY
-            if inp.advisor_urgency == "HIGH" and inp.alignment == "agree":
+            if inp.advisor_urgency == "HIGH" and alignment == "agree":
                 return TelegramStatus.ACT_NOW
             return TelegramStatus.WAIT_FOR_LIMIT
         return TelegramStatus.INFORMATION_ONLY
 
     # Tier 1 mechanical reminder — never ACT NOW without a fresh analysis.
+    if blocked:
+        return TelegramStatus.INFORMATION_ONLY
     if bullish_plan and inp.plan_state in (ReminderState.IN_BUY_ZONE, ReminderState.APPROACHING_BUY):
         return TelegramStatus.WAIT_FOR_LIMIT
     if (
@@ -185,3 +218,49 @@ def reminder_wording(
             dont,
         )
     return plan.guidance, dont
+
+
+@dataclass
+class Revalidation:
+    """The price an actionable message is rendered against, re-checked after
+    the analysis finished (the price may have moved while the LLM ran)."""
+
+    price: float | None
+    price_ts: datetime | None
+    moved_atr: float | None
+    state: ReminderState | None
+    stale: bool
+    reason: str = ""
+
+
+def revalidate(
+    plan: WeeklyPlan | None,
+    freshness: PlanFreshness,
+    *,
+    pre_price: float | None,
+    pre_ts: datetime | None,
+    post_price: float | None,
+    post_ts: datetime | None,
+    atr: float | None,
+    now: datetime,
+    approach_atr: float = 0.5,
+    max_age_min: float = 30.0,
+) -> Revalidation:
+    """Reclassify against the plan at render time (pure).
+
+    Uses the refreshed post-analysis price when available, else the
+    pre-analysis price if it is still fresh enough; otherwise the result is
+    stale and nothing downstream may read as actionable.
+    """
+    from watchy.plan_monitor import plan_state
+
+    price, ts = (post_price, post_ts) if post_price is not None else (pre_price, pre_ts)
+    reason = "" if post_price is not None else "price not refreshed after the analysis"
+    stale = price is None or ts is None or now - ts > timedelta(minutes=max_age_min)
+    if stale and not reason:
+        reason = "price is older than the freshness limit"
+    moved = None
+    if pre_price is not None and post_price is not None and atr and atr > 0:
+        moved = abs(post_price - pre_price) / atr
+    state = plan_state(plan, freshness, price, atr, approach_atr=approach_atr)
+    return Revalidation(price, ts, moved, state, stale, reason)

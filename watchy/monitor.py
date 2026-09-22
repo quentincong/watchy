@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from watchy.guards import StatusInputs, reminder_wording, select_status
+from watchy.guards import (
+    StatusInputs,
+    classify_alignment,
+    reminder_wording,
+    select_status,
+)
 from watchy.market_calendar import session_label
 from watchy.messages import MessageContext, format_et, render_plan_card
 from watchy.plan import (
@@ -58,7 +63,29 @@ def position_state_of(position_source: Any, ticker: str) -> PositionState:
     return PositionState.HELD
 
 
-def data_is_stale(bundle: Any, now: datetime, max_age_min: float) -> bool:
+def fetch_live_price(ticker: str) -> tuple[float | None, datetime | None]:
+    """A refreshed price for post-analysis revalidation: (price, fetched_at).
+
+    Goes through the scanner's cached fetch (yfinance-cache refetches the
+    forming bar once it is older than ~10 minutes). Returns (None, None) on
+    any failure — the guard then falls back to the pre-analysis price if it
+    is still fresh, else labels the message stale.
+    """
+    from watchy.positions import _latest_price
+
+    try:
+        price = _latest_price(ticker)
+    except Exception:  # noqa: BLE001
+        logger.warning("live price refresh failed for %s", ticker, exc_info=True)
+        return None, None
+    if price is None:
+        return None, None
+    return price, datetime.now(timezone.utc)
+
+
+def data_is_stale(
+    bundle: Any, now: datetime, max_age_min: float, require_session_bar: bool = True
+) -> bool:
     """Market data too old to support actionable wording.
 
     Stale when there is no price, the fetch is older than ``max_age_min``, or
@@ -71,7 +98,7 @@ def data_is_stale(bundle: Any, now: datetime, max_age_min: float) -> bool:
     if fetched is None or now - fetched > timedelta(minutes=max_age_min):
         return True
     bar = getattr(bundle, "timestamp", None)
-    if bar is not None:
+    if require_session_bar and bar is not None:
         try:
             bar_date = bar.date() if hasattr(bar, "date") else None
         except Exception:  # noqa: BLE001
@@ -171,6 +198,7 @@ def build_reminder(
         route=route,
         risk_trigger=risk_trigger,
         stale_move_atr=stale_move_atr,
+        verdict=ev.plan.upstream_verdict if ev.plan else "",
     ))
     usable = ev.plan if ev.freshness in (
         PlanFreshness.ACTIVE, PlanFreshness.EXPIRED, PlanFreshness.INVALIDATED,
@@ -195,6 +223,8 @@ def build_reminder(
         dont_do=dont,
         verdict=ev.plan.upstream_verdict if ev.plan else "",
         advisor_decision=ev.plan.decision if ev.plan else "",
+        alignment=classify_alignment(
+            ev.plan.upstream_verdict, ev.plan.decision) if ev.plan else "",
         mode=mode,
         source_freshness=source_freshness(ev.plan),
         notes=msg_notes,

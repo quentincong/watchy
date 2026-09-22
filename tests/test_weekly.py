@@ -139,7 +139,7 @@ def store(tmp_path):
     s.close()
 
 
-def _weekly_run(store, config, advice, runner_side_effect=None, tickers=None):
+def _weekly_run(store, config, advice, runner_side_effect=None, tickers=None, post_price=124.0):
     notifier = MagicMock()
     source = MagicMock()
     source.get_position.return_value = None
@@ -152,7 +152,9 @@ def _weekly_run(store, config, advice, runner_side_effect=None, tickers=None):
          patch("watchy.tier2.run_pipeline", pipeline), \
          patch("watchy.tier2.save_digest", return_value="/tmp/d.json") as save, \
          patch("watchy.tier2.get_advice", return_value=advice) as get_adv, \
-         patch("watchy.tier2.time.sleep"):
+         patch("watchy.tier2.time.sleep"), \
+         patch("watchy.tier2.fetch_live_price",
+               side_effect=lambda t: (post_price, datetime.now(timezone.utc))):
         results = run_daily_scan(config, store, notifier, weekly=True, tickers=tickers)
     return results, notifier, pipeline, save, get_adv
 

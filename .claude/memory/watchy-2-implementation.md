@@ -33,6 +33,12 @@ rollback. `tier1._take_profit_decision` (pure-ish) + `_fire_take_profit`; take-p
 both modes (`TestTakeProfitZoneWeekly`). Every scan → `ROUTE {json}` + `route_log` row. Paid routes
 reserve budget in `triggered.py` (Phases 6–7).
 
+**Phase 5 (guards)** — `guards.revalidate`, `classify_alignment`, `entry_blocked`,
+`monitor.fetch_live_price`; weekly card status = real guard (grep `WEEKLY_CARD`). Order in
+`_select_status`: stale feed > invalidation > TR route > DO NOT CHASE > moved>stale_move_atr >
+plan freshness > entry/exit. `ACT NOW` only with advisor HIGH + verdict agree + in buy zone
+(entries) or held (exits).
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on
@@ -47,6 +53,9 @@ Design decisions worth remembering:
 - A mechanical (no-LLM) reminder can never be `ACT NOW`; best case is `WAIT FOR LIMIT`. If the
   router wanted an interpretation that didn't run (shadow/budget/input missing/failure), entry
   wording is capped at `INFORMATION ONLY` (`StatusInputs.interpretation_pending`).
+- Conflict display vs blocking: any direction difference shows "conflict — human review" (spec §13
+  example BUY/HOLD still WAIT FOR LIMIT); only verdict SELL/HOLD + advisor BUY/ADD (and verdict SELL
+  + bullish buy plan) *blocks* entry wording.
 - Matrix gaps filled: `rsi_oversold` = Bollinger-lower row; volume/ATR anomaly w/o negative move =
   Notify Only; UNKNOWN position = held rules (conservative, like the 1.x Tier 2 gate).
 - Levels outside 0.5×–2× the input price are rejected as implausible.
