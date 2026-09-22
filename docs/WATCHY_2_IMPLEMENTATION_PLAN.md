@@ -546,3 +546,16 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   `INFORMATION ONLY`; `ACT NOW` requires `agree`, HIGH urgency, a fresh price and an executable plan
   state. Weekly cards now carry a real status; the pre-market prior-close bar does not mark them
   stale by itself.
+- **Phases 6–7 — Fast Recheck and Triggered Risk: done (one combined checkpoint; they share
+  `watchy/triggered.py`).** Before spending, the ticker lock is taken non-blocking (a Weekly Full or
+  another analysis in progress → Notify Only, `busy`) and a slot is reserved atomically in
+  `triggered_budget`; the reservation is marked `ok`/`failed`. Fast Recheck loads the *weekly*
+  digest (missing digest or plan → Notify Only, no reservation) and calls only the advisor with an
+  event-context block. Triggered Risk runs market + sentiment + news, bull/bear and simplified risk,
+  saves only the *latest* digest (the weekly digest stays the plan's source), then the advisor; an
+  invalidation-driven run first sends the deterministic warning. Both persist an `event_override`
+  (one-session validity, the base plan's levels copied so the advisor cannot move boundaries),
+  re-check the price, and render through the guards. Failures fall back to the deterministic
+  reminder labelled "analysis failed". Model/thinking level, components, latency, pre/post price and
+  override id go into the ROUTE record; token cost stays in the existing `TOKENCOST`/`GEMINICOST`
+  lines.

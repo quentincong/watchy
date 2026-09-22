@@ -39,6 +39,12 @@ reserve budget in `triggered.py` (Phases 6–7).
 plan freshness > entry/exit. `ACT NOW` only with advisor HIGH + verdict agree + in buy zone
 (entries) or held (exits).
 
+**Phases 6–7 (paid analysis)** — `triggered.execute()`: non-blocking ticker lock (`busy`),
+atomic `try_reserve_triggered` (keyed by session), FR = advisor on `load_digest(kind="weekly")` +
+`event_context`, TR = `TRIGGERED_RISK_SPEC` (market+sentiment+news, bull/bear, simplified) + advisor,
+`build_override` copies base levels (advisor can't move boundaries), guards after
+`fetch_live_price`. Grep `TRIGGERED`. Committed together (shared module).
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on

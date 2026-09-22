@@ -240,6 +240,7 @@ _DOWNGRADE_NOTES = {
     "input_missing": "{route} not run: no valid weekly plan/digest — Notify Only fallback",
     "budget_exhausted": "{route} not run: paid-analysis budget exhausted for this session",
     "unavailable": "{route} not run: paid analysis unavailable",
+    "busy": "{route} not run: another analysis for this ticker is in progress",
 }
 
 
