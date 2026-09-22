@@ -59,6 +59,11 @@ owner must review, then push outside the Tier-2 window (ideally Fri after 20:00 
 Monday's Weekly Full creates the first plans) and tag `v2.0.0-rc.1` (`gh release create` needs the
 FULL sha). The older note in [[watchy-git-workflow]] about `0.1.0` is superseded by this bump.
 
+**RC corrections (2026-09-22)** — forward-version guard in `StateStore._refuse_newer_schema` (runs
+before the WAL pragma; a newer `user_version` → RuntimeError, db untouched); `plan_validity` uses
+`market_calendar.session_close_utc()` so a forced Weekly Full after the final session's close plans
+next week (calendar-aware early closes / holiday weeks; 16:00 ET fallback).
+
 Design decisions worth remembering:
 - Plan decision comes from the advisor `Decision:` header; advisor HOLD on a **non-held** name is
   stored as WATCH (ownership and direction are separate facts). The block has no decision field on

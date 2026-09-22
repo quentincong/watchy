@@ -30,6 +30,7 @@ class StateStore:
         self._lock = threading.RLock()
         self.backup_path: str | None = None
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._refuse_newer_schema(db_path)
         self._conn.execute("PRAGMA journal_mode=WAL")
         try:
             self._backup_before_upgrade()
@@ -43,6 +44,23 @@ class StateStore:
                 "was left in place; restore the pre-upgrade backup next to it "
                 "if needed and fix the error before restarting."
             ) from exc
+
+    def _refuse_newer_schema(self, db_path: str) -> None:
+        """Stop before touching a database written by a newer Watchy.
+
+        Running older code against it would stamp ``user_version`` back down to
+        this build's SCHEMA_VERSION and write rows the newer schema may not
+        expect. Checked before any statement that can modify the file.
+        """
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            self._conn.close()
+            raise RuntimeError(
+                f"state.db at {db_path} has schema version {version}, newer than "
+                f"this Watchy build supports ({SCHEMA_VERSION}). Refusing to start "
+                "so the database is not downgraded; deploy the newer Watchy code "
+                "(or restore a backup made for this version)."
+            )
 
     def _backup_before_upgrade(self) -> None:
         """Copy an existing 1.x database aside once before the 2.0 migration.

@@ -29,6 +29,9 @@ Triggered Risk call is made. The Weekly Full and take-profit calls still run.
 - A migration error stops the daemon with a `state.db migration failed ... left in place` message in
   the journal. The database is never recreated or deleted; fix the cause (disk, permissions) and
   restart, or restore the backup.
+- A database stamped with a *newer* `user_version` than the running code supports is refused at
+  startup (`newer than this Watchy build supports`) and left untouched — deploy the newer code
+  instead of letting older code downgrade it.
 - 1.x code runs unchanged against a migrated database (it ignores the new tables and
   `user_version`), so a code rollback does not require a database rollback.
 
@@ -56,7 +59,8 @@ run.** Pick a window outside the market session and outside Monday 10:00–14:00
    → `user_version=2`, `SHADOW MODE`.
 8. If deployed mid-week, tickers have no plan until Monday: Tier 1 still sends technical warnings
    (information-only) and take-profit alerts. To bootstrap a ticker now (paid, one full pipeline
-   each): `$PY ~/watchy/scripts/watchy_ctl.py weekly NVDA --yes`.
+   each): `$PY ~/watchy/scripts/watchy_ctl.py weekly NVDA --yes`. A forced run after the week's
+   final session has closed (e.g. Friday evening) plans the following trading week.
 
 ## 4. Daily / weekly shadow checklist (1–2 weeks)
 

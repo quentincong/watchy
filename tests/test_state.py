@@ -459,3 +459,29 @@ class TestReminderAndBudget:
                          "triggers": ["macd_bearish_cross"]})
         rows = store.get_route_log("NVDA")
         assert rows[0]["triggers"] == ["macd_bearish_cross"]
+
+
+class TestForwardVersionProtection:
+    def test_newer_schema_refused_and_untouched(self, v1_db):
+        conn = sqlite3.connect(v1_db)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+        conn.commit()
+        conn.close()
+        before = open(v1_db, "rb").read()
+        with pytest.raises(RuntimeError, match="newer than this Watchy build"):
+            StateStore(str(v1_db))
+        assert open(v1_db, "rb").read() == before
+        conn = sqlite3.connect(v1_db)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
+        assert conn.execute("SELECT prev_rsi FROM ticker_state").fetchone()[0] == 55.5
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        assert "analysis_plan" not in tables
+        conn.close()
+        import glob
+        assert not glob.glob(f"{v1_db}.v*-backup-*")
+
+    def test_current_version_still_opens(self, v1_db):
+        StateStore(str(v1_db)).close()
+        s = StateStore(str(v1_db))
+        assert s._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        s.close()

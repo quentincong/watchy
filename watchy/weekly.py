@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from watchy.market_calendar import session_label, week_session_bounds
+from watchy.market_calendar import session_close_utc, session_label, week_session_bounds
 from watchy.plan import (
     NUMERIC_FIELDS,
     TEXT_FIELDS,
@@ -29,15 +29,20 @@ logger = logging.getLogger(__name__)
 def plan_validity(now: datetime) -> tuple[str, str]:
     """(valid_from_session, expires_after_session) for a plan created at ``now``.
 
-    Valid from today's session through the last session of this week. A run on
-    a weekend or after the week's last session (a manual force) plans for the
-    coming week instead, so it can never be born expired.
+    Valid from today's session through the last session of this week. A run
+    after the week's final session has *closed* (Friday after 16:00 ET, the
+    Thursday close of a holiday-shortened week, or a weekend) plans for the
+    coming trading week instead, so it can never be born expired. A run before
+    or during the final session keeps this week.
     """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     today = session_label(now)
     first, last = week_session_bounds(now)
-    if today > last:
-        nxt = now + timedelta(days=7 - today.weekday())
-        first, last = week_session_bounds(nxt)
+    if today > last or (today == last and now >= session_close_utc(last)):
+        monday = today + timedelta(days=7 - today.weekday())
+        probe = datetime(monday.year, monday.month, monday.day, 17, 0, tzinfo=timezone.utc)
+        first, last = week_session_bounds(probe)
         return first.isoformat(), last.isoformat()
     return max(today, first).isoformat(), last.isoformat()
 

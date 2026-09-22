@@ -1,7 +1,7 @@
 # Watchy 2.0 — Weekly Planning and Triggered Analysis
 
-Status: implementation-ready  
-Scope: implementation plan only; this document does not claim that the proposed policy improves returns  
+Status: implementation-ready<br>
+Scope: implementation plan only; this document does not claim that the proposed policy improves returns<br>
 Target release: `v2.0.0-rc.1` after implementation and tests, then `v2.0.0` after shadow validation
 
 ## 1. Objective
@@ -582,3 +582,9 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   zone-based entry wording; manually deactivated / invalidated plans are labelled as such; if plan
   evaluation or routing raises, the scan still fires an eligible take-profit alert exactly once and
   persists the take-profit state (§6: failures must not suppress take-profit notifications).
+- **RC corrections (2026-09-22):** `StateStore` refuses to open a database whose `user_version` is
+  newer than its `SCHEMA_VERSION` (checked before any write, so the version and data stay
+  untouched). `weekly.plan_validity` now compares against the final session's *close*
+  (`market_calendar.session_close_utc`, exchange calendar with a 16:00 ET fallback): a forced Weekly
+  Full after Friday's close — or after the last session of a holiday-shortened / early-close week —
+  plans the following trading week, while a run before or during that session keeps this week.

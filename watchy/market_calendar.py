@@ -138,3 +138,23 @@ def week_session_bounds(now: datetime | None = None) -> tuple[date, date]:
         except Exception:
             logger.warning("week-session bounds failed; Mon–Fri fallback", exc_info=True)
     return monday, friday
+
+
+def session_close_utc(day: date) -> datetime:
+    """Regular-session close of ``day`` in UTC.
+
+    Uses the exchange calendar (so early closes such as the day after
+    Thanksgiving are exact); falls back to 16:00 New York time.
+    """
+    cal = get_calendar()
+    if cal is not None:
+        try:
+            import pandas as pd
+
+            close = cal.session_close(pd.Timestamp(day))
+            return close.to_pydatetime().astimezone(timezone.utc)
+        except Exception:
+            logger.warning("session_close lookup failed; 16:00 ET fallback", exc_info=True)
+    if _NY is not None:
+        return datetime(day.year, day.month, day.day, 16, 0, tzinfo=_NY).astimezone(timezone.utc)
+    return datetime(day.year, day.month, day.day, 20, 0, tzinfo=timezone.utc)

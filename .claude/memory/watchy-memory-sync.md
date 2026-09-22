@@ -61,6 +61,19 @@ must explicitly contain the following exact sentence:
 
 这一些开发内容是codex在powershell里做的。
 
+## Reusable guide — 2026-09-10
+
+A reusable Chinese implementation guide for applying the same local Codex and Claude
+Code compatibility design to other project directories was created at:
+
+`C:\Users\qc\Downloads\codex-claude-code-local-compatibility.md`
+
+It covers the shared-rule layout, memory comparison and migration, Windows directory
+junction setup, SessionEnd retirement, Git/GitHub boundaries, validation, rollback, and
+the concrete Watchy example.
+
+这一些开发内容是codex在powershell里做的。
+
 ## Suspended GitHub memory sync
 
 The only purpose of `scripts/sync_memory.sh` was to copy Claude Code's machine-local
@@ -95,3 +108,15 @@ machine-to-GitHub mirror, not local bidirectional synchronization, and is now re
 - `.gitignore` protects both machine-local hook configuration files from accidental commits.
 
 这一些开发内容是codex在powershell里做的。
+
+## Live cross-tool check — 2026-09-10 (Claude Code)
+
+- Fresh headless `claude -p` from WSL, all file tools disabled: answered the `MEMORY.md` titles for
+  `watchy-journald-persistence.md` and the Codex-written `watchy-memory-sync.md` entry → Claude Code
+  auto-loads the shared index through the WSL symlink.
+- `codex.exe exec --sandbox read-only` (binary: `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`, not on
+  PATH): followed AGENTS.md → CLAUDE.md → `.claude/memory/`, returned the provenance sentence, the journald
+  index title, and the Claude-written "Claude Code on WSL" heading → Codex reads Claude's memory.
+- Caveat: Codex's memory load is instruction-driven (AGENTS.md), not native; Claude's is native. Neither
+  locks files — don't have both tools editing `MEMORY.md` at the same moment. PowerShell console shows the
+  Chinese as mojibake (display only; files are UTF-8).

@@ -36,6 +36,42 @@ class TestPlanValidity:
         wed = datetime(2026, 9, 23, 15, 0, tzinfo=timezone.utc)
         assert plan_validity(wed) == ("2026-09-23", "2026-09-25")
 
+    def test_friday_during_session_keeps_this_week(self):
+        fri = datetime(2026, 9, 25, 19, 59, tzinfo=timezone.utc)   # 15:59 ET
+        assert plan_validity(fri) == ("2026-09-25", "2026-09-25")
+
+    def test_friday_after_close_plans_next_week(self):
+        fri = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)    # 16:00 ET close
+        assert plan_validity(fri) == ("2026-09-28", "2026-10-02")
+        late = datetime(2026, 9, 26, 1, 0, tzinfo=timezone.utc)    # 21:00 ET Friday
+        assert plan_validity(late) == ("2026-09-28", "2026-10-02")
+
+    def test_holiday_short_week_after_thursday_close(self):
+        pytest.importorskip("exchange_calendars")
+        # Good Friday 2026-04-03: Thursday 04-02 is the week's last session.
+        during = datetime(2026, 4, 2, 18, 0, tzinfo=timezone.utc)
+        assert plan_validity(during) == ("2026-04-02", "2026-04-02")
+        after = datetime(2026, 4, 2, 20, 30, tzinfo=timezone.utc)  # 16:30 EDT
+        assert plan_validity(after) == ("2026-04-06", "2026-04-10")
+        friday = datetime(2026, 4, 3, 15, 0, tzinfo=timezone.utc)  # holiday
+        assert plan_validity(friday) == ("2026-04-06", "2026-04-10")
+
+    def test_early_close_uses_calendar(self):
+        pytest.importorskip("exchange_calendars")
+        # 2026-11-27 (day after Thanksgiving) closes 13:00 ET = 18:00 UTC.
+        assert plan_validity(datetime(2026, 11, 27, 18, 30, tzinfo=timezone.utc)) == (
+            "2026-11-30", "2026-12-04")
+        assert plan_validity(datetime(2026, 11, 27, 17, 30, tzinfo=timezone.utc)) == (
+            "2026-11-27", "2026-11-27")
+
+    def test_fallback_without_calendar(self, monkeypatch):
+        import watchy.market_calendar as mc
+        monkeypatch.setattr(mc, "get_calendar", lambda: None)
+        assert plan_validity(datetime(2026, 9, 25, 19, 0, tzinfo=timezone.utc)) == (
+            "2026-09-25", "2026-09-25")
+        assert plan_validity(datetime(2026, 9, 25, 20, 5, tzinfo=timezone.utc)) == (
+            "2026-09-28", "2026-10-02")
+
     def test_weekend_force_plans_next_week(self):
         sat = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)
         assert plan_validity(sat) == ("2026-09-28", "2026-10-02")
