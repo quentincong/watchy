@@ -300,3 +300,162 @@ class TestAdviceLog:
             reopened.close()
         finally:
             os.unlink(path)
+
+
+# --- Watchy 2.0 persistence (Phase 1) ---
+
+from tests.fixtures_v2 import make_plan  # noqa: E402
+from watchy.state import SCHEMA_VERSION  # noqa: E402
+
+
+_V1_SCHEMA = """
+CREATE TABLE ticker_state (
+    ticker TEXT PRIMARY KEY, prev_sma_50_above_200 INTEGER,
+    prev_macd_above_signal INTEGER, prev_rsi REAL, prev_atr REAL,
+    avg_volume_20d REAL, avg_atr_20d REAL, last_full_analysis_ts TEXT,
+    updated_ts TEXT
+);
+CREATE TABLE signal_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+    signal_type TEXT NOT NULL, fired_ts TEXT NOT NULL, details TEXT,
+    notified INTEGER DEFAULT 0
+);
+CREATE TABLE run_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, tier TEXT NOT NULL,
+    trigger_type TEXT, started_ts TEXT NOT NULL, completed_ts TEXT,
+    success INTEGER DEFAULT 0, summary TEXT
+);
+INSERT INTO ticker_state (ticker, prev_rsi, updated_ts) VALUES ('NVDA', 55.5, '2026-06-01');
+INSERT INTO signal_log (ticker, signal_type, fired_ts, details)
+    VALUES ('NVDA', 'rsi_oversold', '2026-06-01T14:00:00+00:00', '{"current_price": 120.0}');
+INSERT INTO run_history (ticker, tier, trigger_type, started_ts, success)
+    VALUES ('NVDA', 'tier2', 'scheduled_daily', '2026-06-01T10:02:00+00:00', 1);
+"""
+
+
+@pytest.fixture
+def v1_db(tmp_path):
+    path = tmp_path / "state.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(_V1_SCHEMA)
+    conn.commit()
+    conn.close()
+    return path
+
+
+class TestV2Migration:
+    def test_upgrade_preserves_data_and_adds_tables(self, v1_db):
+        s = StateStore(str(v1_db))
+        try:
+            assert s.get_ticker_state("NVDA")["prev_rsi"] == 55.5
+            assert s.get_signal_log()[0]["details"]["current_price"] == 120.0
+            tables = {r[0] for r in s._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            assert {"analysis_plan", "plan_reminder_state", "triggered_budget",
+                    "route_log", "advice_log", "kv"} <= tables
+            cols = {r[1] for r in s._conn.execute("PRAGMA table_info(ticker_state)")}
+            assert {"prev_take_profit_zone", "prev_quantity"} <= cols
+            assert s._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        finally:
+            s.close()
+
+    def test_upgrade_takes_one_backup(self, v1_db):
+        s = StateStore(str(v1_db))
+        backup = s.backup_path
+        s.close()
+        assert backup and os.path.exists(backup)
+        conn = sqlite3.connect(backup)
+        assert conn.execute("SELECT prev_rsi FROM ticker_state").fetchone()[0] == 55.5
+        conn.close()
+        s2 = StateStore(str(v1_db))  # already migrated → no second backup
+        assert s2.backup_path is None
+        s2.close()
+
+    def test_fresh_db_has_no_backup(self, store):
+        assert store.backup_path is None
+
+    def test_migration_failure_is_loud_and_keeps_db(self, v1_db, monkeypatch):
+        def boom(self):
+            raise sqlite3.OperationalError("disk I/O error")
+        monkeypatch.setattr(StateStore, "_migrate", boom)
+        with pytest.raises(RuntimeError, match="left in place"):
+            StateStore(str(v1_db))
+        conn = sqlite3.connect(v1_db)
+        assert conn.execute("SELECT prev_rsi FROM ticker_state").fetchone()[0] == 55.5
+        conn.close()
+
+
+class TestPlanPersistence:
+    def test_round_trip(self, store):
+        plan = make_plan(source_ref={"run_id": 7})
+        pid = store.insert_plan(plan, raw_output="raw")
+        got = store.get_active_plan("nvda")
+        assert got.id == pid and got.buy_zone_low == 121.0
+        assert got.source_ref == {"run_id": 7}
+        assert got.validation_errors == [] and got.activated_ts
+
+    def test_new_weekly_supersedes_previous(self, store):
+        first = store.insert_plan(make_plan())
+        second = store.insert_plan(make_plan(valid_from_session="2026-09-28",
+                                             expires_after_session="2026-10-02"))
+        assert store.get_active_plan("NVDA").id == second
+        assert store.get_plan(first).status == "superseded"
+        assert len(store.get_plan_history("NVDA")) == 2  # history kept
+
+    def test_invalid_refresh_keeps_previous_row(self, store):
+        good = store.insert_plan(make_plan())
+        bad = store.insert_plan(make_plan(decision="MAYBE"))
+        assert store.get_active_plan("NVDA").id == good
+        assert store.get_latest_plan("NVDA").id == bad
+        assert store.get_plan(bad).validation_errors
+
+    def test_override_never_touches_base(self, store):
+        base = store.insert_plan(make_plan())
+        override = make_plan(kind="event_override", parent_plan_id=base)
+        oid = store.insert_plan(override)
+        assert store.get_active_plan("NVDA").id == base
+        assert store.get_latest_override("NVDA", base).id == oid
+
+    def test_deactivate_keeps_history(self, store):
+        pid = store.insert_plan(make_plan())
+        assert store.deactivate_plan(pid) is True
+        assert store.get_active_plan("NVDA") is None
+        assert store.get_plan(pid).status == "deactivated"
+        assert store.deactivate_plan(pid) is False
+
+
+class TestReminderAndBudget:
+    def test_reminder_state_round_trip(self, store):
+        assert store.get_reminder_state("NVDA") == {}
+        store.save_reminder_state("NVDA", plan_id=1, state="inside_buy_zone",
+                                  state_since_ts="t0", notified={"inside_buy_zone": "t0"})
+        got = store.get_reminder_state("nvda")
+        assert got["state"] == "inside_buy_zone" and got["notified"] == {"inside_buy_zone": "t0"}
+
+    def test_budget_caps(self, store):
+        assert store.try_reserve_triggered("2026-09-21", "NVDA", "FAST_RECHECK", 1, 2)
+        assert store.try_reserve_triggered("2026-09-21", "NVDA", "FAST_RECHECK", 1, 2) is None
+        assert store.try_reserve_triggered("2026-09-21", "AMZN", "TRIGGERED_RISK", 1, 2)
+        assert store.try_reserve_triggered("2026-09-21", "TSM", "FAST_RECHECK", 1, 2) is None
+        # next exchange session resets
+        assert store.try_reserve_triggered("2026-09-22", "TSM", "FAST_RECHECK", 1, 2)
+
+    def test_budget_is_atomic_under_concurrency(self, store):
+        wins = []
+
+        def worker(t):
+            if store.try_reserve_triggered("2026-09-21", t, "FAST_RECHECK", 1, 2):
+                wins.append(t)
+
+        threads = [threading.Thread(target=worker, args=(f"T{i}",)) for i in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(wins) == 2
+
+    def test_route_log_round_trip(self, store):
+        store.log_route({"ticker": "nvda", "route": "NOTIFY_ONLY", "session": "2026-09-21",
+                         "triggers": ["macd_bearish_cross"]})
+        rows = store.get_route_log("NVDA")
+        assert rows[0]["triggers"] == ["macd_bearish_cross"]

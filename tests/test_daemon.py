@@ -109,3 +109,25 @@ class TestTier2DayGuard:
              patch("watchy.daemon.run_daily_scan") as mock_scan:
             _tier2_job(MagicMock(), MagicMock(), MagicMock())
         mock_scan.assert_called_once()
+
+
+class TestSessionHelpers:
+    """Watchy 2.0 exchange-session labels and weekly validity bounds."""
+
+    def test_session_label_uses_new_york_date(self):
+        from watchy.market_calendar import session_label
+        # 01:00 UTC Tuesday = 21:00 ET Monday → Monday's session, not UTC's date.
+        assert str(session_label(_utc(2026, 9, 22, 1, 0))) == "2026-09-21"
+        assert str(session_label(_utc(2026, 9, 21, 15, 0))) == "2026-09-21"
+
+    def test_week_bounds_normal_week(self):
+        from watchy.market_calendar import week_session_bounds
+        first, last = week_session_bounds(_utc(2026, 9, 23, 15, 0))
+        assert (str(first), str(last)) == ("2026-09-21", "2026-09-25")
+
+    def test_week_bounds_good_friday(self):
+        pytest.importorskip("exchange_calendars")
+        from watchy.market_calendar import week_session_bounds
+        # Good Friday 2026 is April 3 — the week ends Thursday.
+        first, last = week_session_bounds(_utc(2026, 3, 31, 15, 0))
+        assert (str(first), str(last)) == ("2026-03-30", "2026-04-02")

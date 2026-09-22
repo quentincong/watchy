@@ -130,6 +130,42 @@ class TakeProfitConfig:
 
 
 @dataclass
+class WeeklyPlanConfig:
+    """Watchy 2.0 plan monitoring (Tier 1, no LLM).
+
+    ``approach_atr``: a price within this many ATRs above the buy zone reads
+    "approaching". ``stale_move_atr``: if price moves more than this many ATRs
+    between an analysis's input price and the moment its message is rendered,
+    the message is downgraded to STALE — RECHECK REQUIRED. ``renotify_h``: the
+    same plan state is not re-notified within this window even if price flaps
+    across a boundary (transitions still update the persisted state).
+    ``market_data_max_age_min``: a price older than this is treated as stale.
+    """
+    approach_atr: float = 0.5
+    stale_move_atr: float = 0.5
+    renotify_h: float = 6.0
+    market_data_max_age_min: float = 30.0
+
+
+@dataclass
+class TriggeredAnalysisConfig:
+    """Paid Tier 1 analysis (Fast Recheck / Triggered Risk) — Watchy 2.0.
+
+    ``enabled: false`` is shadow mode: routes are computed, logged and the
+    deterministic reminder is sent, but no paid call is made. Budgets reset on
+    the exchange trading-session boundary. Weekly Full and the take-profit path
+    are never limited by this budget. ``bearish_shock_atr``: a session move of
+    at least this many ATRs down counts as a material negative move.
+    ``tickers``: optional allow-list for limited enablement (empty = all).
+    """
+    enabled: bool = False
+    max_per_ticker_per_trading_day: int = 1
+    max_global_per_trading_day: int = 2
+    bearish_shock_atr: float = 0.75
+    tickers: list[str] = field(default_factory=list)
+
+
+@dataclass
 class TelegramConfig:
     bot_token: str = ""
     chat_id: str = ""
@@ -185,6 +221,19 @@ class WatchyConfig:
     # None = every trading day, i.e. the historical behaviour, so leaving this
     # unset changes nothing. A per-ticker tier2_days overrides it.
     tier2_days: list[str] | None = None
+    # Watchy 2.0 scheduling. "weekly" (2.0 default): Tier 2 runs only on the
+    # first trading session of each week and produces a structured weekly plan;
+    # Tier 1 monitors the plan and routes triggers. "daily": the 1.x behaviour
+    # (daily Tier 2 + paid Tier 1 signal rescans) — the configuration rollback.
+    tier2_schedule: str = "weekly"
+    weekly_plan: WeeklyPlanConfig = field(default_factory=WeeklyPlanConfig)
+    triggered_analysis: TriggeredAnalysisConfig = field(
+        default_factory=TriggeredAnalysisConfig
+    )
+
+    @property
+    def weekly_mode(self) -> bool:
+        return str(self.tier2_schedule).strip().lower() != "daily"
 
     def get_ticker_config(self, ticker: str) -> TickerConfig | None:
         """Return the TickerConfig for a symbol (case-insensitive), or None."""
@@ -228,7 +277,21 @@ class WatchyConfig:
             proximity_pct_ceiling=raw.get("proximity_pct_ceiling", 20.0),
             max_tier1_pipelines_per_day=raw.get("max_tier1_pipelines_per_day"),
             tier2_days=raw.get("tier2_days"),
+            tier2_schedule=_schedule(raw.get("tier2_schedule", "weekly")),
+            weekly_plan=WeeklyPlanConfig(**(raw.get("weekly_plan") or {})),
+            triggered_analysis=TriggeredAnalysisConfig(
+                **(raw.get("triggered_analysis") or {})
+            ),
         )
+
+
+def _schedule(value: Any) -> str:
+    """Validate tier2_schedule; a typo must fail at startup, not silently pick
+    a mode that changes what gets paid for."""
+    v = str(value).strip().lower()
+    if v not in ("weekly", "daily"):
+        raise ValueError(f"tier2_schedule must be 'weekly' or 'daily', got {value!r}")
+    return v
 
 
 def _merge_secrets(config: WatchyConfig, secrets_path: str) -> WatchyConfig:

@@ -1,5 +1,9 @@
 # Watchy Implementation Plan
 
+> **Active work:** The implementation-ready plan for the next major redesign is
+> [`WATCHY_2_IMPLEMENTATION_PLAN.md`](WATCHY_2_IMPLEMENTATION_PLAN.md). The material below is retained
+> as the completed 1.x implementation history and must not be mistaken for the current backlog.
+
 The original file-by-file backlog (issues #1–#14) is **complete**. Finished work lives in
 git history and the closed GitHub issues. The only remaining items are **deferred by choice**:
 the #4 bearish-skip (dropped until Schwab is authoritative) and open-orders (optional) — plus

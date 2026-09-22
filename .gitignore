@@ -14,3 +14,4 @@ secrets.yaml
 .venv/
 venv/
 reports/
+*.db.v*-backup-*
