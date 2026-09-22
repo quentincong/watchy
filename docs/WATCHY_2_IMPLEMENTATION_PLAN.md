@@ -578,3 +578,7 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   [`RELEASE_NOTES_v2.0.0-rc.1.md`](RELEASE_NOTES_v2.0.0-rc.1.md). Package version `2.0.0rc1` in both
   `pyproject.toml` and `watchy/__init__.py` (a test enforces equality). No tag, release, push or
   deployment was made — those need owner review (§20 gate 2 onward).
+- **Review fixes (post-Phase 9):** a plan withdrawn by a watch-only death cross can no longer carry
+  zone-based entry wording; manually deactivated / invalidated plans are labelled as such; if plan
+  evaluation or routing raises, the scan still fires an eligible take-profit alert exactly once and
+  persists the take-profit state (§6: failures must not suppress take-profit notifications).
