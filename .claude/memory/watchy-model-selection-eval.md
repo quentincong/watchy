@@ -379,3 +379,11 @@ OpenRouter: token price pass-through, 5.5% credit fee (BYOK free <$25k/mo). Prop
 across hosts (quantization/implementation variance) unless pinned: `provider: {order:[first-party],
 allow_fallbacks:false, require_parameters:true}`. TA takes ONE provider per run → OpenRouter is also the only
 no-code way to mix vendors across deep/quick roles.
+- **User-supplied AA Qwen charts (2026-09-28, authoritative over the aggregator numbers above):** hallucination
+  (1−non-halluc) 3.7 Max 26 · 3.7 Plus 28 · **3.8 Max (0902) 29** · 3.8-27B xhigh 30 · 3.6 Plus 35 · 3.8 2.4T 39 ·
+  **3.8 Max (0803) 42** · Flash-Next 45 · 27B low 53 / medium 67. Accuracy: 3.8 Max 32 · 3.7 Max 31 · Flash-Next 25 ·
+  27B 16–17. AA-LCR v1.1: 27B xhigh 82 · 0902/2.4T/Flash-Next/27B-med 80 · 3.7 Max 79 · 3.8 Max 78 · 3.7 Plus 73.
+  → the "23%→40%" regression was the first 3.8 Max snapshot; **0902 fixed it** ⇒ pin dated snapshot ids (Qwen
+  floating aliases auto-upgrade). 27B halluc swings 30–67% with reasoning level ⇒ unstable, avoid.
+  Pricing caveat: Qwen3.7 Max $2.50/$7.50 ⇒ full pipeline ≈ $0.82/ticker ≈ $810/yr; RM/PM-only or advisor-only
+  use is the affordable shape (advisor ≈ $57/yr at 19 calls/week).
