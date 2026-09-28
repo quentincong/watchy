@@ -413,3 +413,11 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   would be under-counted ~15× unless a Qwen tier is added.
 - Weekly digests store only the pipeline result (no indicator bundle / position) → replay needs frozen per-ticker inputs,
   and both arms must be re-run fresh on the current prompt (production 9/28 mixed low/medium and the pre-fix prompt).
+- **User decisions (2026-09-28 evening):** direct first-party APIs (DeepSeek + DashScope intl, no OpenRouter); Qwen on
+  **RM/PM only** (Bull/Bear/risk debaters stay DeepSeek); thinking levels decided only after the offline test
+  (quality + current vs Qwen + thinking-level sweep). Still open: snapshot id, Gemini fallback, staging.
+- Cost vs 1.x (measured prices, assumes Qwen as verbose as the current models): 1.x as billed (8/21, V4, daily) DeepSeek
+  $280 + Gemini $98 = **$378/yr**; 2.0 now DeepSeek $63 + Gemini $33–42 (≈20 advisor calls/wk, low→medium) = **~$100/yr**;
+  2.0 + Qwen: DeepSeek minus RM/PM $55 (RM+PM = 13% of DS, $0.164/wk) + Qwen RM/PM $117 + Qwen advisor $36–46 =
+  **~$210/yr** → 45% under 1.x, ~2× 2.0 today; Qwen could be ~2× more verbose than estimated before it passes 1.x.
+  Not counted: Fast Recheck / Triggered Risk calls (off in shadow mode).
