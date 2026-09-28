@@ -450,3 +450,10 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   builds the Qwen client itself, so it can send `extra_body` (`reasoning`, `provider.require_parameters`). DeepSeek stays direct.
   Downsides: 05-20 only; prepaid credits (empty = RM/PM fail, so a low-balance alert or auto top-up is needed); one more
   vendor in the data path/outage chain; `reasoning.max_tokens` → Qwen `thinking_budget` mapping must be verified in the test.
+- **Existing OpenRouter key found on the VPS (2026-09-28):** `/home/watchy/abtest/.orkey` (mode 600, created 2026-09-02;
+  user labels it "watchy advisor"). NOT in `secrets.yaml`, not in any env/unit. Key status (read-only `/api/v1/key`):
+  no spending limit, $3.38 used (Sept); account credits $5.00 total / $3.54 used → **~$1.46 left**, too little for the
+  test. It came from an undocumented **2026-09-02 advisor bake-off** in `~/abtest/` (`ab_or.py`: gemini-3.5-flash@low vs
+  OpenRouter GPT-5.6 / Claude, cost ceiling $0.02559/call, old worktree `~/abtest/wt` @ 31e7a9f, pre-2.0 prompt) whose
+  results were never written to memory. `ab_or.py` is a reusable pattern for OpenRouter calls (reasoning tokens share the
+  completion budget, so it sets a generous max_tokens).
