@@ -457,3 +457,6 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   OpenRouter GPT-5.6 / Claude, cost ceiling $0.02559/call, old worktree `~/abtest/wt` @ 31e7a9f, pre-2.0 prompt) whose
   results were never written to memory. `ab_or.py` is a reusable pattern for OpenRouter calls (reasoning tokens share the
   completion budget, so it sets a generous max_tokens).
+- **2026-09-28 18:37 UTC:** OpenRouter key copied into VPS `~/watchy_config/secrets.yaml` as top-level `openrouter: {api_key}`
+  (backup `secrets.yaml.bak-20260928T183747Z`, mode 600 kept); `load_config()` verified OK with the trading python, live
+  advisor still gemini-3.5-flash, daemon not restarted. User topped up: credits $25 total, ~$21.5 left.
