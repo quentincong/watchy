@@ -481,3 +481,12 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   `compare_rm_pm_models.RATING_RE` only matches the rendered-schema form → use `compare_rm_pm_qwen.rating_of`.
 - Latent bug: `advisor._post_json` uses `urllib.request` but advisor.py never imports it (works in the daemon only
   because another module imports it first; standalone scripts crash). Add the import with the implementation.
+- **2026-09-28 results (VPS `~/abtest_qwen/stage1.jsonl`, `rmpm.jsonl`).** Advisor stage 1 (19 tickers × 2, frozen 9/28
+  prompts): Gemini-3.5F-medium valid 97% / $0.050 / 18s vs Qwen default-thinking 95% / **$0.027** / 39s; 0 truncation;
+  decision agreement 66/76; Qwen more action-prone (APH TRIM×2, COHR SELL×2, CLS/MRVL HOLD↔BUY). RM/PM replay (json_schema):
+  **PM identical to DeepSeek on 19/19 at every budget** (PM sees the saved RM plan + risk debate); **RM diverges hard** —
+  DeepSeek 11/19 Underweight, Qwen 7–8 Buy, agreement 3–7/19 (but DeepSeek vs its own prod run is only 13/19); Qwen RM
+  price-faithfulness 84–94% vs 99% (inspect for fabricated numbers). `reasoning.max_tokens` IS enforced (2000 arm max
+  think = 2000) but natural use is ~2k, so 4000/8000 rarely bind; **budget 2000 → 2/19 PM replies degenerated into runaway
+  JSON strings** (free-text retry) → don't go below ~4000. Per-call cost comparisons across arms are skewed by prompt
+  caching (later arms hit Alibaba cache); single production call ≈ the uncached $0.018–0.020 for RM/PM.
