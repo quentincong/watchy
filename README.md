@@ -278,7 +278,7 @@ lightweight LLM (Gemini by default) to synthesize a **condensed analysis digest*
 (the decision chain + each analyst's summary tail, not the full prose) + position
 into actionable advice, and pushes a natural-language summary to Telegram. The
 advisor's own token usage is logged as a `GEMINICOST` line; its thinking level is
-per-tier (`llm.gemini_thinking_tier1` and `llm.gemini_thinking_tier2`, both `low`)
+per-tier (`llm.gemini_thinking_tier1` and `llm.gemini_thinking_tier2`, both `medium` since 2026-09-28)
 in `secrets.yaml`.
 
 Advisor urgency is an **order deadline**, not an importance score: `HIGH` means

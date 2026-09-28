@@ -592,13 +592,15 @@ def _format_analysis(result: dict[str, Any]) -> str:
 # sizing, reasons, risks. 600 tokens truncated it mid-sentence (and on Gemini 2.5
 # thinking models the budget is shared with hidden reasoning), so give it room.
 # The Watchy 2.0 WEEKLY PLAN block adds ~200-300 tokens to the visible answer.
-_ADVICE_MAX_TOKENS = 1536
+_ADVICE_MAX_TOKENS = 2048
 # Extra output headroom for the answer when Gemini thinking is enabled — thinking
 # tokens share maxOutputTokens, so the visible answer needs its own room on top.
 # 2048 (ceiling 3072) truncated AVGO's first automatic Weekly Full (2026-09-28:
 # think 2654 + out 414 = 3068) and left the other 18 tickers only 80-350 tokens
 # short of the cap. A ceiling is not a charge — only generated tokens are billed.
-_GEMINI_THINK_HEADROOM = 6144
+# Raised again to 16384 (ceiling 18432) with the move to medium thinking, which
+# can use several times low's ~2-2.7k thinking tokens.
+_GEMINI_THINK_HEADROOM = 16384
 
 # Gemini prices, USD per 1M tokens (ai.google.dev/gemini-api/docs/pricing).
 # Thinking tokens are billed at the output rate. Used only for the greppable
@@ -645,8 +647,10 @@ def _effective_key(llm: LLMConfig) -> str:
 # its derived-target write (tier2 stores the #16 target off the advisor's Target
 # field), because these calls had no retry at all — observed 2026-08-07 on
 # NVT/TSM/COHR, all three failing in http.client._read_status. 30s was also tight
-# for a long prompt plus thinking.
-_HTTP_TIMEOUT = 60
+# for a long prompt plus thinking. 60s -> 180s with medium thinking (2026-09-28):
+# a timed-out call is retried and billed again, so the timeout must clear the
+# slowest normal reply, not just the median one.
+_HTTP_TIMEOUT = 180
 _HTTP_ATTEMPTS = 3
 _HTTP_BACKOFF_S = 2.0
 

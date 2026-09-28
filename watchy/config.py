@@ -96,9 +96,14 @@ class LLMConfig:
     # line is regex-extracted, and minimal is measurably the worst tier for that:
     # AA scores gemini-3.5-flash (minimal) at 47.3% IFBench / 58.3% AA-LCR / 74%
     # hallucination, vs 74.6% / 79.7% / 62% one tier up. ~$8/yr for all of Tier 1.
-    # Tier 2 stays low — medium was measured as no better for the decision.
-    gemini_thinking_tier1: str = "low"
-    gemini_thinking_tier2: str = "low"
+    # 2026-09-28: BOTH tiers raised to "medium". In 1.x medium measured no better
+    # for the *decision*, but Watchy 2.0 asks the advisor for a week-long plan of
+    # 7 price levels with ordering rules (the first Weekly Full put 3/19
+    # invalidation levels on the wrong side of the price), and the advisor now
+    # runs ~19 times a week, so the extra thinking costs ~$30/yr. Re-measure
+    # plan validity / level sanity against the low-thinking batches.
+    gemini_thinking_tier1: str = "medium"
+    gemini_thinking_tier2: str = "medium"
 
 
 @dataclass

@@ -326,3 +326,17 @@ GPQA Diamond 91% / AA-LCR 66% / HLE 37% / Terminal-Bench 2.1 79% / SciCode 50% /
 只差 1.33× 却出现 2.8× 的每任务成本差 —— 用 3k/4k 反推 flash 应该**更便宜**(0.44×)。
 AA 的 cost/task 里显然还含别的（多轮/重试/输入侧）。**方向可信（三条证据同向），倍数不可信。**
 ⚠️ AA 全部测 `Max Effort`；watchy 跑 `high`。啰嗦度的爆炸有可能是 max 档特有的。
+
+## 2026-09-28 — advisor thinking low → medium (both tiers), user decision (Claude Code)
+Model unchanged (gemini-3.5-flash). User asked whether better models exist; recorded evals are 8/14 (GPT-5.6,
+Gemini 3.7F), 8/13 (V4-Pro), 9/10 (V4.1 Flash, no transferable evidence). **Gemini 3.8 Flash is wired into the
+price/thinking tables (7e13171, 9/02) but was never evaluated** — the open gap if the question returns.
+Why medium now despite the 1.x note "medium no better for the decision": Watchy 2.0 changed the advisor's job —
+a week-long 12-field plan with 7 levels + ordering rules, not one Take-Profit line — and the first Weekly Full put
+3/19 invalidation levels on the wrong side of the price; advisor volume fell to ~19 calls/week so medium costs
+~$30/yr. Proposed 2.0 ranking (not yet adopted formally): hallucination > production plan-validity rate > level
+sanity vs price > run-to-run stability > format following > AA-LCR; price only a tiebreaker.
+Also: `_ADVICE_MAX_TOKENS` 2048, `_GEMINI_THINK_HEADROOM` 16384 (ceiling 18432), `_HTTP_TIMEOUT` 60→180 s (a
+timed-out call is retried and re-billed). No secrets.yaml override on the VPS — code defaults govern.
+**How to apply:** compare medium vs low batches on PLAN_INVALID count, invalidation/zone gaps, think tokens and
+GEMINICOST before quoting any improvement; the 9/28 forced re-run mixes low (early tickers) and medium.

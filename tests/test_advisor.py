@@ -960,3 +960,11 @@ class TestPlanInstructionsPrice:
         from watchy.advisor import _plan_instructions
         from watchy.plan import PLAN_BLOCK_INSTRUCTIONS
         assert _plan_instructions(None) == PLAN_BLOCK_INSTRUCTIONS
+
+
+def test_advisor_thinking_defaults_are_medium():
+    """2026-09-28: both tiers raised low -> medium for Watchy 2.0 plan writing."""
+    llm = LLMConfig()
+    assert llm.gemini_thinking_tier1 == "medium"
+    assert llm.gemini_thinking_tier2 == "medium"
+    assert _gemini_thinking_config("medium", "gemini-3.5-flash") == {"thinkingLevel": "medium"}
