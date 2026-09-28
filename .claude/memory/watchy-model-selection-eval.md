@@ -357,3 +357,25 @@ TradingAgents (VPS install) already supports Qwen (dashscope/-intl, `model_catal
 pipeline switch is config + key, not code. The 8/21 RM/PM pro→flash veto was effectively overridden by DeepSeek
 itself on 9/14 (Pro alias → V4.1 Flash). Pipeline vendors other than DeepSeek were never evaluated before today.
 Next step proposed: offline replay of the 9/28 digests (advisor) and a few tickers (pipeline) — needs a DashScope key.
+
+### 2026-09-28 (later) — wider survey + OpenRouter (Claude Code; nothing switched, discussion pending)
+AA-LCR v1.1 / halluc. / IFBench / $ in-out / speed (AA pages unless noted; benchlm = aggregator):
+- MiniMax-M3: LCR 83, halluc 16.1% (AA article; benchlm 18.4), acc 15% (Omni idx 1), IFBench 83, $0.30/$1.20, 154 t/s;
+  weights "to follow", served by MiniMax + SiliconFlow/GMI/Novita. TA supports provider `minimax` (catalog lists M2.x).
+- Qwen3.8 Max (0902): LCR 80, IFBench 82.8 (benchlm #2), Omni idx 12, $2/$6, **39 t/s**, 108k tok/task; halluc
+  **conflicting** 28.8% (benchlm, "Preview") vs 40% (orcarouter citing AA, "up from 23%").
+- Qwen3.8 Flash(-Next, open weights 180B-A6B): halluc 45.3%, $0.15/$0.47, 58 t/s; Qwen3.8-27B halluc 30.3%.
+- DeepSeek V4.1 Flash: **LCR 84** (best of the set) but Omni idx −5 / halluc 96.5%; 221 t/s.
+- Gemini 3.8 Flash: LCR 81, Omni idx 30 (highest accuracy of the set), halluc 55.2%, IFBench not found, 311 t/s.
+- Claude 4.5 Haiku (non-reasoning): LCR 50, Omni idx −8, $1/$5 → not a candidate. Kimi K3 halluc ~51%.
+Low hallucination here mostly = abstention (M3/Qwen3.7 Plus Omni idx ≈ 1): good for the grounded advisor; the
+pipeline also needs accuracy (8/21 RM/PM veto was on factual accuracy).
+Pipeline cost/ticker at 9/28 NVDA token mix (121k in-miss, 51k hit, 66k out; model verbosity ignored):
+DeepSeek $0.058 (~$61/yr weekly) · M3 $0.119 (~$117) · Qwen3.7 Plus $0.158 (~$156) · Gemini 3.8F $0.342 (~$338,
+×2 after promo) · Qwen3.8 Max $0.651 (~$643). **Speed constraint:** weekly batch must end before the 13:30 UTC open;
+at ~6 min/ticker today, a 66 t/s (Qwen3.7 Plus) or 39 t/s (Qwen3.8 Max) pipeline likely overruns.
+OpenRouter: token price pass-through, 5.5% credit fee (BYOK free <$25k/mo). Proprietary models (Qwen3.7 Plus,
+3.8 Max) have 1 provider → pure proxy (same quality, one more hop). Open-weight models are load-balanced by price
+across hosts (quantization/implementation variance) unless pinned: `provider: {order:[first-party],
+allow_fallbacks:false, require_parameters:true}`. TA takes ONE provider per run → OpenRouter is also the only
+no-code way to mix vendors across deep/quick roles.
