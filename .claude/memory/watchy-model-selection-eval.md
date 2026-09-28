@@ -387,3 +387,29 @@ no-code way to mix vendors across deep/quick roles.
   floating aliases auto-upgrade). 27B halluc swings 30–67% with reasoning level ⇒ unstable, avoid.
   Pricing caveat: Qwen3.7 Max $2.50/$7.50 ⇒ full pipeline ≈ $0.82/ticker ≈ $810/yr; RM/PM-only or advisor-only
   use is the affordable shape (advisor ≈ $57/yr at 19 calls/week).
+
+### 2026-09-28 (evening) — Qwen3.7 Max + DeepSeek split: verified facts before building (Claude Code; nothing changed)
+User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepseek-flash` for the rest. Checked on the VPS TA install:
+- **TA deep role = Research Manager + Portfolio Manager only** (`graph/setup.py`). Quick = 4 analysts, Bull/Bear, Trader,
+  3 risk debaters, Reflector, SignalProcessor. Moving debaters to Qwen is NOT a deep/quick swap — it needs per-node routing.
+- `trading_graph.py` builds deep and quick clients with separate `create_llm_client(provider=config["llm_provider"], ...)`
+  calls → one provider per run. Proposed no-fork route: Watchy wraps `tradingagents.graph.trading_graph.create_llm_client`
+  and picks the provider by model id (DeepSeek path unchanged, keeps `DeepSeekChatOpenAI` reasoning_content round-trip).
+- **OpenRouter is not no-code:** TA `OpenAIClient` passes only `timeout/max_retries/reasoning_effort/temperature/api_key/
+  callbacks/http_client*` — no `extra_body`, so provider pinning (`order/allow_fallbacks/require_parameters`) and Qwen
+  `thinking_budget` cannot be sent. DeepSeek via provider "openrouter" also loses the reasoning_content round-trip
+  (needed in thinking-mode tool loops) and changes the baseline.
+- RM/PM/Trader/Sentiment use `with_structured_output`; `deepseek-flash` and `qwen3.7-max-*` both resolve to TA `_DEFAULT`
+  caps (function_calling + forced tool_choice). A failed structured call is retried as free text (WARN only) = silent
+  double billing. Check this in the Qwen smoke test.
+- Official Model Studio intl price (2026-09-28): qwen3.7-max **$2.50 in / $7.50 out**, no context tiers, thinking and
+  non-thinking priced the same; cache-hit rate is on a separate page. Thinking is **on by default**; `thinking_budget`
+  supported; non-streaming OK. IDs: `qwen3.7-max` (= 2026-05-20), `qwen3.7-max-2026-06-08`, `-2026-05-20`, preview/05-17
+  (thinking-only). Which snapshot AA measured (26% halluc.) is not yet known.
+- Cost at 9/28 Monday per-node tokens (19 tickers, DeepSeek total $1.22/week ≈ $63/yr; assumes Qwen is as verbose as
+  DeepSeek): Qwen RM+PM ≈ $117/yr · +Bull/Bear $171 · +3 risk debaters $240 · Trader $17 · analysts $335.
+- Watchy gaps: advisor `get_advice` dispatch knows only anthropic/openai/deepseek/gemini (no thinking control and no
+  cost line on the openai path); `token_tracker._price_tier` prices every non-"pro" model as DeepSeek flash → Qwen RM/PM
+  would be under-counted ~15× unless a Qwen tier is added.
+- Weekly digests store only the pipeline result (no indicator bundle / position) → replay needs frozen per-ticker inputs,
+  and both arms must be re-run fresh on the current prompt (production 9/28 mixed low/medium and the pre-fix prompt).
