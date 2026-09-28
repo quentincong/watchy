@@ -340,3 +340,20 @@ Also: `_ADVICE_MAX_TOKENS` 2048, `_GEMINI_THINK_HEADROOM` 16384 (ceiling 18432),
 timed-out call is retried and re-billed). No secrets.yaml override on the VPS — code defaults govern.
 **How to apply:** compare medium vs low batches on PLAN_INVALID count, invalidation/zone gaps, think tokens and
 GEMINICOST before quoting any improvement; the 9/28 forced re-run mixes low (early tickers) and medium.
+
+## 2026-09-28 — Qwen / Gemini 3.8 / pipeline check (Claude Code, web research; nothing switched)
+Sources: benchlm.ai AA-Omniscience hallucination board (9/2026, aggregates AA) + artificialanalysis.ai comparison
+pages (AA-LCR **v1.1** — not comparable with the older v1 numbers above, e.g. 3.5F "81.0").
+| model | halluc.↓ | AA-LCR v1.1 | Omni Index | $/1M in/out | speed |
+|---|---|---|---|---|---|
+| Gemini 3.5 Flash (ours) | 60.7% | 73 (high) | 21 | 1.50/9.00 | 213 t/s |
+| **Gemini 3.8 Flash** | 55.2% | **81** (high) | 30 | 0.75/3.75 promo→12/31 | 311 t/s |
+| **Qwen3.7 Plus** (6/1) | **27.7%** | 73 | 1 (abstains a lot) | 0.40/1.60 | 66 t/s |
+| Qwen3.7 Max | 25.6% (other source 22.9%) | 79 | 13 | 2.50/7.50 | 212 t/s |
+| Qwen3.8 Max Preview / Flash-Next | 28.8% / 45.3% | ? | ? | ? | |
+| DeepSeek V4.1 Flash (**all TA nodes**) | **96.5%** (worst listed) | ? | | 0.15/0.60 | |
+IFBench not found for any Qwen. **The 8/14 lock condition "another family with hallucination <70%" is now met by Qwen.**
+TradingAgents (VPS install) already supports Qwen (dashscope/-intl, `model_catalog.py`) and Google natively → a
+pipeline switch is config + key, not code. The 8/21 RM/PM pro→flash veto was effectively overridden by DeepSeek
+itself on 9/14 (Pro alias → V4.1 Flash). Pipeline vendors other than DeepSeek were never evaluated before today.
+Next step proposed: offline replay of the 9/28 digests (advisor) and a few tickers (pipeline) — needs a DashScope key.
