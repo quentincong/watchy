@@ -131,8 +131,9 @@ upside "wrong above X" level goes into Resistance/Trim-Condition. Prompt now sta
 `validate_plan` rejects `invalidation_level >= input_price`. (2) Gemini ceiling 3072→7680
 (`_ADVICE_MAX_TOKENS` 1536 + headroom 6144) + `ADVISOR_TRUNCATED` on MAX_TOKENS/length/max_tokens.
 (3) `_history_via_cache_or_direct` refetches from plain yfinance when the yfc frame lacks today's bar after
-the open (`YFC_STALE_BAR`; `market_calendar.session_open_utc`). Unit-tested only — by ~15:00 UTC yfc had
-caught up live, so the refetch path wasn't exercised on the VPS yet; grep `YFC_STALE_BAR` next session open.
+the open (`YFC_STALE_BAR`; `market_calendar.session_open_utc`). **Verified live after deploy (ae4c062,
+restart 14:43 UTC):** `YFC_STALE_BAR TSM` fired right after the restart and was refetched; 0 `data_stale`
+ROUTEs afterwards (vs 30/30 before); SKHY got its first-ever Tier 1 ROUTE (14:45, plan missing until Monday).
 (4) `compute_indicators` returns a partial bundle from 34 rows (`MIN_HISTORY_ROWS`); `prev_sma_50_above_200`
 stored as None without a 200-SMA. (6) `plan show` prints a rejected latest refresh. Item 5 (Schwab) the user
 re-authed themselves. This week's withdrawn/missing plans (AMZN, LUMN, CEG, AVGO, SKHY) are NOT regenerated
