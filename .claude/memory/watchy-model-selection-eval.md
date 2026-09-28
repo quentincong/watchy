@@ -440,3 +440,13 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   model page shows the $2.50/$7.50 (+ implicit cache hit $0.50) list — confirm the HK rate on the first bill before
   re-pricing. Store `qwen: {api_key, base_url}` as a top-level secrets section. At HK prices the ~$210/yr estimate
   becomes ~$160/yr (Qwen RM/PM ≈ $77, Qwen advisor ≈ $24–31).
+- **Qwen account verification failed for the user (2026-09-28) → OpenRouter for Qwen only, being considered.** OpenRouter
+  public API (checked 18:2x UTC): `qwen/qwen3.7-max` canonical slug **`qwen3.7-max-20260520`** (the 05-20 snapshot;
+  no 06-08 on OpenRouter), served by **Alibaba only** (first-party, so no quantization/host variance), **$1.475 in /
+  $4.425 out, cache read $0.295** — cheaper than Qwen Cloud Singapore ($2.50/$7.50) and HK ($1.65/$4.95), still cheaper
+  after the ~5.5% credit fee. Supports `reasoning`, `tools`, `tool_choice`, `structured_outputs`, `response_format`.
+  New snapshots get new slugs (e.g. `qwen/qwen3.8-max-0902`), but verify the response `model` each call.
+  The earlier "OpenRouter needs a TA fork" objection only applies to routing DeepSeek through it: the Watchy shim
+  builds the Qwen client itself, so it can send `extra_body` (`reasoning`, `provider.require_parameters`). DeepSeek stays direct.
+  Downsides: 05-20 only; prepaid credits (empty = RM/PM fail, so a low-balance alert or auto top-up is needed); one more
+  vendor in the data path/outage chain; `reasoning.max_tokens` → Qwen `thinking_budget` mapping must be verified in the test.
