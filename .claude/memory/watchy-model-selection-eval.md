@@ -433,3 +433,10 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
 - 🚨 **Secrets gotcha:** `_merge_secrets` does `LLMConfig(**secrets["llm"])` → any unknown key under `llm:` raises
   TypeError at daemon start (auto-update restarts on every push). Put the Qwen key in a NEW top-level section
   (`qwen: {api_key: ...}`); unknown top-level sections are ignored.
+- **Region = Hong Kong (user's Qwen account, 2026-09-28).** Model Studio qwen3.7-max page, HK rows: `qwen3.7-max`,
+  `-2026-06-08`, `-2026-05-20` all "Global" scope at **$1.65 in / $4.951 out** (~34% under Singapore's $2.50/$7.50);
+  snapshots 600 RPM / 1M TPM (ample). HK has no `-preview`/`-2026-05-17` (not needed). Endpoint is workspace-specific:
+  `https://{WorkspaceId}.cn-hongkong.maas.aliyuncs.com/compatible-mode/v1`; keys are region-bound. Qwen Cloud's own
+  model page shows the $2.50/$7.50 (+ implicit cache hit $0.50) list — confirm the HK rate on the first bill before
+  re-pricing. Store `qwen: {api_key, base_url}` as a top-level secrets section. At HK prices the ~$210/yr estimate
+  becomes ~$160/yr (Qwen RM/PM ≈ $77, Qwen advisor ≈ $24–31).
