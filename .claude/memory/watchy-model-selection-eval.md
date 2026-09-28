@@ -421,3 +421,15 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   2.0 + Qwen: DeepSeek minus RM/PM $55 (RM+PM = 13% of DS, $0.164/wk) + Qwen RM/PM $117 + Qwen advisor $36–46 =
   **~$210/yr** → 45% under 1.x, ~2× 2.0 today; Qwen could be ~2× more verbose than estimated before it passes 1.x.
   Not counted: Fast Recheck / Triggered Risk calls (off in shadow mode).
+- **More decisions (same evening):** test first, review the cost table after; advisor arms drop Gemini-low (baseline =
+  Gemini-medium only); **Gemini = automatic advisor fallback** (approved); **switch advisor + RM/PM together** (one deploy).
+- **Provider = Qwen Cloud** (qwencloud.com, Alibaba's official global platform, launched 2026-05-26 Singapore) — NOT the
+  Model Studio dashscope-intl endpoint TA's built-in `qwen` provider hard-codes. OpenAI-compatible base
+  `https://maas.qwencloudapi.com/compatible-mode/v1`, keys start `sk-ws-` → pass base_url explicitly. Docs list dated
+  IDs even though the console shows only `qwen3.7-max`: `-2026-06-08`, `-2026-05-20`, `-preview`/`-2026-05-17`; 1M ctx,
+  64k max output. `thinking_budget` 1–32768, **default 4000**; thinking tokens billed as output. Qwen Cloud price page
+  is JS-rendered (not verified; Model Studio intl = $2.50/$7.50). Use pay-as-you-go, not "Token Plan" (coding-tool credits).
+  AA's Qwen3.7 Max page names no snapshot → the advisor replay tests both 05-20 and 06-08.
+- 🚨 **Secrets gotcha:** `_merge_secrets` does `LLMConfig(**secrets["llm"])` → any unknown key under `llm:` raises
+  TypeError at daemon start (auto-update restarts on every push). Put the Qwen key in a NEW top-level section
+  (`qwen: {api_key: ...}`); unknown top-level sections are ignored.
