@@ -460,3 +460,24 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
 - **2026-09-28 18:37 UTC:** OpenRouter key copied into VPS `~/watchy_config/secrets.yaml` as top-level `openrouter: {api_key}`
   (backup `secrets.yaml.bak-20260928T183747Z`, mode 600 kept); `load_config()` verified OK with the trading python, live
   advisor still gemini-3.5-flash, daemon not restarted. User topped up: credits $25 total, ~$21.5 left.
+- **2026-09-28 offline test harness built** (`scripts/compare_advisor_qwen.py` freeze/run/report,
+  `scripts/compare_rm_pm_qwen.py` run/report; working copies + results on VPS `~/abtest_qwen/`). Freeze captures the
+  exact production prompt by calling the real `get_advice(plan_request=True)` with `_call_gemini` stubbed; prices = the
+  `advice_log` mark behind each weekly digest (the 9/28 digests are the 15:00–17:50 UTC manual re-runs, not the 10:02
+  batch); ATR from daily bars ≤ 9/25; book = advice_log snapshot, cash = Schwab cache with later trades (AMZN +1, COHR −1)
+  unwound. Account number masked to `****4734` in frozen prompts (production still sends it to Gemini — the advisor
+  doesn't need it; consider masking in production too).
+- 🚨 **Production finding (2026-09-28):** since the 9/10 switch to canonical `deepseek-flash`, TA's capability table no
+  longer matches (`_BY_ID` lists `deepseek-v4-*`, pattern `^deepseek-v\d`) → `_DEFAULT` caps → forced `tool_choice` →
+  every Sentiment/RM/Trader/PM structured call gets `400 Thinking mode does not support this tool_choice` and TA
+  retries as free text (448 WARNs 9/14–9/28). Rejected pre-generation → one extra round-trip, **no double billing**;
+  the pipeline has simply been running the free-text path. Fix candidate: the Watchy shim (or a TA caps entry) maps
+  `deepseek-flash` to `_DEEPSEEK_THINKING`. Not fixed yet — changes RM/PM output format, so decide with the Qwen switch.
+- **Qwen on OpenRouter + TA structured output:** with `provider.require_parameters: true`, function-calling structured
+  output → `404 No endpoints found that can handle the requested parameters`, with or without `tool_choice` (Alibaba
+  endpoint won't take tools+reasoning). **`method="json_schema"` works** (1 call, no fallback). The shim must bind Qwen
+  RM/PM with json_schema. Response `model` = `qwen/qwen3.7-max`, provider `Alibaba`; `reasoning.enabled` honoured.
+- Free-text RM/PM ratings come in many shapes ("Research Manager Verdict: X", "Rating:** X", "Final Trading Decision: X");
+  `compare_rm_pm_models.RATING_RE` only matches the rendered-schema form → use `compare_rm_pm_qwen.rating_of`.
+- Latent bug: `advisor._post_json` uses `urllib.request` but advisor.py never imports it (works in the daemon only
+  because another module imports it first; standalone scripts crash). Add the import with the implementation.
