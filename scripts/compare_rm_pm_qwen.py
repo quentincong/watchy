@@ -13,10 +13,13 @@ transcript).
 Arms:  deepseek                  production client (deepseek-flash, TA factory)
        qwen:<budget>[:<method>]  qwen/qwen3.7-max, reasoning.max_tokens=<budget>
                                  (or "default" = reasoning on, no budget)
+       deepseek:struct           deepseek-flash, structured via function calling
+                                 with tool_choice suppressed (the caps fix)
        method: tc   = TA default caps: function calling + forced tool_choice
                       (what a plain shim gets with no capability override)
                auto = function calling, tool_choice suppressed
                json = response_format json_schema
+               free = no structured output (free text, like production DeepSeek)
 The TA structured-output fallback (a failed structured call retried once as
 free text) is detected from its WARNING and reported, together with the number
 of LLM calls per node — a fallback that happens after generation is paid twice.
@@ -133,6 +136,22 @@ def _make_llm(arm: str, rec, keys: dict):
 
         os.environ.setdefault("DEEPSEEK_API_KEY", keys["deepseek"])
         return create_llm_client("deepseek", "deepseek-flash", callbacks=[rec]).get_llm()
+    if arm == "deepseek:struct":
+        # Production DeepSeek with the capability fix: structured output via
+        # function calling but no forced tool_choice (what TA's
+        # _DEEPSEEK_THINKING caps do for deepseek-v4-*), so the structured path
+        # actually runs instead of 400 -> free text.
+        from tradingagents.llm_clients.openai_client import DeepSeekChatOpenAI
+
+        class DeepSeekStruct(DeepSeekChatOpenAI):
+            def with_structured_output(self, schema, *, method=None, **kwargs):
+                kwargs.setdefault("tool_choice", None)
+                return super().with_structured_output(
+                    schema, method="function_calling", **kwargs)
+
+        return DeepSeekStruct(model="deepseek-flash", base_url="https://api.deepseek.com",
+                              api_key=keys["deepseek"], callbacks=[rec],
+                              timeout=300, max_retries=2)
 
     parts = arm.split(":")
     budget = parts[1] if len(parts) > 1 else "default"
@@ -147,6 +166,10 @@ def _make_llm(arm: str, rec, keys: dict):
                 return super().with_structured_output(schema, method="function_calling", **kwargs)
             if arm_method == "json":
                 return super().with_structured_output(schema, method="json_schema", **kwargs)
+            if arm_method == "free":
+                # bind_structured catches this and the node runs free text,
+                # the same path production DeepSeek takes today.
+                raise NotImplementedError("free-text arm")
             return super().with_structured_output(schema, method=method, **kwargs)
 
     arm_method = method
@@ -163,7 +186,7 @@ def _make_llm(arm: str, rec, keys: dict):
 
 
 def _usd(arm: str, calls: list[dict], when: datetime) -> float:
-    if arm == "deepseek":
+    if arm.startswith("deepseek"):
         from watchy.token_tracker import _cost_usd
 
         return sum(_cost_usd("deepseek-flash", c["in"], c["cached"], c["out"], when)

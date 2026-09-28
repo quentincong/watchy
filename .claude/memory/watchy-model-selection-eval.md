@@ -490,3 +490,13 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   think = 2000) but natural use is ~2k, so 4000/8000 rarely bind; **budget 2000 → 2/19 PM replies degenerated into runaway
   JSON strings** (free-text retry) → don't go below ~4000. Per-call cost comparisons across arms are skewed by prompt
   caching (later arms hit Alibaba cache); single production call ≈ the uncached $0.018–0.020 for RM/PM.
+- **2026-09-28 RM 2×2 (model × format, 19 tickers × 2 reps; `~/abtest_qwen/rm2x2_{ds,qw}.jsonl`, `scripts/analyze_rm_2x2.py`).**
+  Score Sell −2 … Buy +2. **Model effect DeepSeek→Qwen: +1.45 (free text, 17 up/0 down) and +1.29 (structured, 15 up/1 down).
+  Format effect ≈ 0** (DeepSeek free→struct +0.13, Qwen −0.03). → Qwen's bullish RM is the model, not the JSON schema.
+  Qualitatively Qwen adopts the bull's framing ("masterstroke", "dismantled"), weights long-term fundamentals/valuation over
+  the near-term downtrend, and labels buy-on-pullback plans "Buy"; DeepSeek judges like a trader sizing risk today.
+  RM is noisy for both: rep-to-rep same rating DeepSeek 11/19 free, 14/19 struct; Qwen 8/19 free, 12/19 struct. Only GOOG
+  (UW) and VRT/LUMN agree across all setups. **DeepSeek structured with tool_choice suppressed (`deepseek:struct` = the
+  caps fix): 0/38 fallbacks, ratings ~unchanged (+0.13), more stable** → the caps fix is safe to ship on its own.
+  No ground truth for which RM is "right"; PM replay (fed the DeepSeek RM plan) was unaffected, the downstream effect of a
+  bullish RM plan on Trader/risk debate/PM needs full pipeline runs.
