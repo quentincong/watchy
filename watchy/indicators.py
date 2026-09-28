@@ -16,6 +16,11 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
+# Fewest daily bars that still give meaningful short-window indicators: the
+# 20-day average ATR needs 14 + 20 bars, Bollinger/volume averages need 20.
+MIN_HISTORY_ROWS = 34
+
+
 @dataclass
 class IndicatorBundle:
     ticker: str
@@ -79,9 +84,19 @@ def compute_indicators(
         return None
 
     close: pd.Series = df["Close"]
-    if len(close) < 200:
+    if len(close) < MIN_HISTORY_ROWS:
         logger.warning("Insufficient history for %s: %d rows", ticker, len(close))
         return None
+    if len(close) < 200:
+        # A recent listing (SKHY had 55 rows on 2026-09-28) still gets a price,
+        # ATR, RSI, MACD and Bollinger bands; only the moving averages longer
+        # than its history stay None (so no golden/death cross, no SEPA stage).
+        # Returning None here left a held position with no weekly plan and no
+        # Tier 1 scan at all.
+        logger.info(
+            "Short history for %s: %d rows — long moving averages omitted",
+            ticker, len(close),
+        )
 
     bundle = IndicatorBundle(ticker=ticker)
     bundle.timestamp = df.index[-1] if hasattr(df.index[-1], "isoformat") else None
@@ -90,9 +105,9 @@ def compute_indicators(
     bundle.fetched_at = datetime.now(timezone.utc)
 
     # moving averages
-    bundle.sma_50 = float(close.rolling(50).mean().iloc[-1])
-    bundle.sma_150 = float(close.rolling(150).mean().iloc[-1])
-    bundle.sma_200 = float(close.rolling(200).mean().iloc[-1])
+    bundle.sma_50 = _sma(close, 50)
+    bundle.sma_150 = _sma(close, 150)
+    bundle.sma_200 = _sma(close, 200)
     if len(close) >= 220:
         bundle.sma_200_1m_ago = float(close.rolling(200).mean().iloc[-21])
 
@@ -265,7 +280,30 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "429" in msg or "rate" in msg or "too many" in msg
 
 
-def _history_via_cache_or_direct(ticker: str, yf, yfc) -> pd.DataFrame | None:
+def _missing_session_bar(df: pd.DataFrame | None, now: datetime | None = None) -> bool:
+    """True when today's regular session has opened but ``df`` ends on an
+    earlier session — the forming bar is missing and the "current price" is the
+    previous close."""
+    from watchy.market_calendar import session_label, session_open_utc
+
+    if df is None or df.empty:
+        return False
+    now = now or datetime.now(timezone.utc)
+    today = session_label(now)
+    opened = session_open_utc(today)
+    if opened is None or now < opened:
+        return False
+    last = df.index[-1]
+    try:
+        last_date = last.date()
+    except AttributeError:
+        return False
+    return last_date < today
+
+
+def _history_via_cache_or_direct(
+    ticker: str, yf, yfc, now: datetime | None = None
+) -> pd.DataFrame | None:
     """Fetch 1y daily history, preferring the on-disk cache (#2).
 
     `yfinance_cache` only fetches new/outdated bars, cutting redundant Yahoo
@@ -274,10 +312,16 @@ def _history_via_cache_or_direct(ticker: str, yf, yfc) -> pd.DataFrame | None:
     caller's backoff loop, but any *other* yfc failure (e.g. a yfinance/yfc
     metadata incompatibility) degrades to plain yfinance instead of crashing.
     `max_age` bounds how stale the latest bar may be (see _CACHE_MAX_AGE).
+
+    During a session yfc sometimes keeps serving the previous session's last
+    bar for an hour or more (2026-09-28: NVDA/VST/MRVL still on Friday's close
+    at 10:35 ET), so a cached frame without today's bar is refetched from plain
+    yfinance. If that refetch fails the cached frame is returned and the
+    stale-data guard (monitor.data_is_stale) labels it.
     """
     if yfc is not None:
         try:
-            return yfc.Ticker(ticker).history(
+            df = yfc.Ticker(ticker).history(
                 period="1y", interval="1d", max_age=_CACHE_MAX_AGE,
             )
         except Exception as exc:  # noqa: BLE001
@@ -287,6 +331,21 @@ def _history_via_cache_or_direct(ticker: str, yf, yfc) -> pd.DataFrame | None:
                 "yfinance-cache failed for %s (%s); falling back to yfinance",
                 ticker, type(exc).__name__,
             )
+        else:
+            if not _missing_session_bar(df, now):
+                return df
+            logger.warning(
+                "YFC_STALE_BAR %s: cache ends %s — refetching from yfinance",
+                ticker, df.index[-1],
+            )
+            try:
+                fresh = yf.Ticker(ticker).history(period="1y", interval="1d")
+            except Exception:  # noqa: BLE001
+                logger.warning("yfinance refetch failed for %s", ticker, exc_info=True)
+                return df
+            if fresh is None or fresh.empty or fresh.index[-1].date() < df.index[-1].date():
+                return df
+            return fresh
     return yf.Ticker(ticker).history(period="1y", interval="1d")
 
 
@@ -327,6 +386,13 @@ def _fetch_history(ticker: str) -> pd.DataFrame | None:
 
     logger.error("yfinance failed for %s after 3 retries", ticker)
     return None
+
+
+def _sma(close: pd.Series, window: int) -> float | None:
+    """Simple moving average of the last ``window`` closes, None if too short."""
+    if len(close) < window:
+        return None
+    return float(close.rolling(window).mean().iloc[-1])
 
 
 def _compute_rsi(close: pd.Series, period: int = 14) -> float | None:

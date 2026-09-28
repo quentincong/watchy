@@ -116,6 +116,38 @@ class TestValidate:
         assert plan.status == PlanStatus.INVALID.value
         assert any(error in e for e in plan.validation_errors), plan.validation_errors
 
+    @pytest.mark.parametrize("decision,urgency,inv,price", [
+        ("TRIM", "MEDIUM", 256.18, 249.67),   # AMZN 2026-09-28: "close above 256.18"
+        ("WATCH", "LOW", 272.0, 263.27),      # CEG 2026-09-28
+        ("HOLD", "LOW", 250.0, 250.0),        # at the price = already crossed
+    ])
+    def test_invalidation_must_sit_below_input_price(self, decision, urgency, inv, price):
+        """Long-only: an upside 'thesis wrong above X' level would be born
+        crossed and withdraw the plan on its first Tier 1 scan."""
+        plan = make_plan(
+            decision=decision, urgency=urgency, buy_zone_low=None, buy_zone_high=None,
+            chase_ceiling=None, resistance_low=None, resistance_high=None,
+            trim_condition="daily close below 244.65", invalidation_level=inv,
+            input_price=price,
+        )
+        assert plan.status == PlanStatus.INVALID.value
+        assert any("not below input price" in e for e in plan.validation_errors)
+
+    def test_invalidation_below_input_price_is_valid_for_trim(self):
+        plan = make_plan(
+            decision="TRIM", urgency="MEDIUM", buy_zone_low=None, buy_zone_high=None,
+            chase_ceiling=None, resistance_low=252.0, resistance_high=256.18,
+            trim_condition="daily close below 244.65", invalidation_level=238.0,
+            input_price=249.67,
+        )
+        assert plan.status == PlanStatus.ACTIVE.value, plan.validation_errors
+
+    def test_block_instructions_define_invalidation_as_downside(self):
+        from watchy.plan import PLAN_BLOCK_INSTRUCTIONS
+
+        assert "BELOW the current price" in PLAN_BLOCK_INSTRUCTIONS
+        assert "Never put an upside level there" in PLAN_BLOCK_INSTRUCTIONS
+
     def test_nullable_levels_allowed_for_hold(self):
         plan = make_plan(
             decision="HOLD", urgency="LOW", buy_zone_low=None, buy_zone_high=None,

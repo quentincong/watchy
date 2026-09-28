@@ -51,7 +51,11 @@ cadence and the proximity gate do not apply — and asks the advisor for a stric
 `WEEKLY PLAN` block: decision (BUY/ADD/HOLD/TRIM/SELL/WATCH — advisor HOLD on a
 name you don't hold is stored as WATCH), urgency, thesis, buy zone, chase
 ceiling, invalidation level/condition, trim condition, resistance, take-profit
-price, guidance and a concrete *do not*. The plan is valid through the week's
+price, guidance and a concrete *do not*. The account is long-only, so the
+invalidation level is always a *downside* boundary below the current price for
+every decision (a TRIM/SELL/WATCH view's upside "wrong above X" level belongs in
+resistance or the trim condition; a level at or above the price rejects the
+plan). The plan is valid through the week's
 last session and is validated before activation; invalid output is stored for
 diagnosis and never becomes actionable, and a failed refresh never extends last
 week's plan (one batch alert lists tickers without a valid plan). *Notify Only*
@@ -117,8 +121,13 @@ Advisory only — Watchy does not place orders; you decide and execute.
 
 **Observability & controls.** Every Tier 1 evaluation writes a `ROUTE {json}`
 journal line and a `route_log` row; Monday logs `PLAN_ACTIVE` / `PLAN_INVALID` /
-`WEEKLY_PLANS`. `scripts/watchy_ctl.py` offers `status`, `plan
-show|history|expire`, a dry `route` and `preview` (no LLM, no Telegram, no
+`WEEKLY_PLANS`; `ADVISOR_TRUNCATED` flags an advisor reply that hit its output
+ceiling and `YFC_STALE_BAR` a cached history missing today's bar (refetched from
+plain yfinance). Tickers with under 200 daily bars (recent listings) still get a
+price, ATR, RSI, MACD and Bollinger bands — only the longer moving averages and
+SEPA stage are omitted. `scripts/watchy_ctl.py` offers `status`, `plan
+show|history|expire` (`show` also prints a rejected latest refresh with its
+validation errors), a dry `route` and `preview` (no LLM, no Telegram, no
 writes), `weekly TICKER --yes` (paid force) and `replay` — a read-only,
 zero-cost routing replay over the database (and an explicitly supplied research
 CSV) reporting volume and timing, not profitability. Deployment, the shadow

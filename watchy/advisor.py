@@ -304,7 +304,7 @@ def get_advice(
         portfolio=portfolio_text,
         take_profit_guidance=take_profit_guidance,
         event_context=(event_context.strip() + "\n") if event_context else "",
-        plan_instructions=_plan_instructions() if plan_request else "",
+        plan_instructions=_plan_instructions(indicator_bundle) if plan_request else "",
     )
 
     try:
@@ -361,10 +361,19 @@ def get_advice(
         return None
 
 
-def _plan_instructions() -> str:
+def _plan_instructions(indicator_bundle: Any = None) -> str:
+    """The WEEKLY PLAN block spec, anchored to the price the plan is validated
+    against (the bundle's price becomes ``input_price``) so the model can keep
+    every downside level below it."""
     from watchy.plan import PLAN_BLOCK_INSTRUCTIONS
 
-    return PLAN_BLOCK_INSTRUCTIONS
+    price = getattr(indicator_bundle, "current_price", None)
+    if not price:
+        return PLAN_BLOCK_INSTRUCTIONS
+    return (
+        PLAN_BLOCK_INSTRUCTIONS
+        + f"Current price for this plan: {price:.2f}. Invalidation-Level must be below it.\n"
+    )
 
 
 def _parse_advice(raw: str, fallback_ticker: str) -> dict[str, str]:
@@ -582,10 +591,14 @@ def _format_analysis(result: dict[str, Any]) -> str:
 # Advice is a structured header + a 5-8 sentence paragraph with price targets,
 # sizing, reasons, risks. 600 tokens truncated it mid-sentence (and on Gemini 2.5
 # thinking models the budget is shared with hidden reasoning), so give it room.
-_ADVICE_MAX_TOKENS = 1024
+# The Watchy 2.0 WEEKLY PLAN block adds ~200-300 tokens to the visible answer.
+_ADVICE_MAX_TOKENS = 1536
 # Extra output headroom for the answer when Gemini thinking is enabled — thinking
 # tokens share maxOutputTokens, so the visible answer needs its own room on top.
-_GEMINI_THINK_HEADROOM = 2048
+# 2048 (ceiling 3072) truncated AVGO's first automatic Weekly Full (2026-09-28:
+# think 2654 + out 414 = 3068) and left the other 18 tickers only 80-350 tokens
+# short of the cap. A ceiling is not a charge — only generated tokens are billed.
+_GEMINI_THINK_HEADROOM = 6144
 
 # Gemini prices, USD per 1M tokens (ai.google.dev/gemini-api/docs/pricing).
 # Thinking tokens are billed at the output rate. Used only for the greppable
@@ -683,6 +696,17 @@ def _post_json(
     raise last_exc
 
 
+def _warn_if_truncated(truncated: bool, model: str, ticker: str = "") -> None:
+    """Greppable ``ADVISOR_TRUNCATED`` when the reply hit the output ceiling —
+    the tail (the WEEKLY PLAN block, the Take-Profit line) is what gets lost,
+    and downstream parsers only see a missing field."""
+    if truncated:
+        logger.warning(
+            "ADVISOR_TRUNCATED %s model=%s — reply hit the output token ceiling",
+            ticker or "-", model,
+        )
+
+
 def _call_anthropic(prompt: str, llm: LLMConfig) -> str:
     """Call Anthropic Messages API for advice synthesis."""
 
@@ -701,6 +725,7 @@ def _call_anthropic(prompt: str, llm: LLMConfig) -> str:
         "x-api-key": _effective_key(llm),
         "anthropic-version": "2023-06-01",
     })
+    _warn_if_truncated(data.get("stop_reason") == "max_tokens", llm.model)
     return data["content"][0]["text"]
 
 
@@ -724,6 +749,7 @@ def _call_openai_compatible(prompt: str, llm: LLMConfig) -> str:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {_effective_key(llm)}",
     })
+    _warn_if_truncated(data["choices"][0].get("finish_reason") == "length", llm.model)
     return data["choices"][0]["message"]["content"]
 
 
@@ -799,6 +825,9 @@ def _call_gemini(prompt: str, llm: LLMConfig, ticker: str = "", level: str = "of
     except Exception:
         logger.debug("GEMINICOST logging failed", exc_info=True)
 
+    _warn_if_truncated(
+        data["candidates"][0].get("finishReason") == "MAX_TOKENS", model, ticker
+    )
     # With thinking on, skip any thought part and return the first answer text.
     parts = data["candidates"][0]["content"]["parts"]
     for part in parts:

@@ -207,9 +207,11 @@ def _update_state(
         extra["prev_quantity"] = quantity
     store.save_ticker_state(
         ticker,
+        # None while a short-history ticker has no 200-day SMA: the first
+        # scan with one must not read a missing average as "was below".
         prev_sma_50_above_200=(
-            1 if bundle.sma_50 and bundle.sma_200 and bundle.sma_50 > bundle.sma_200
-            else 0
+            None if not (bundle.sma_50 and bundle.sma_200)
+            else int(bundle.sma_50 > bundle.sma_200)
         ),
         prev_macd_above_signal=(
             1 if bundle.macd and bundle.macd_signal and bundle.macd > bundle.macd_signal

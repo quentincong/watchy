@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from watchy.plan import PositionState, plan_freshness
+from watchy.plan import PlanStatus, PositionState, plan_freshness
 
 DEFAULT_DB = os.path.expanduser("~/watchy/state.db")
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -130,6 +130,17 @@ def cmd_plan(args) -> int:
         print(f"{args.ticker.upper()} — session {session}")
         print("weekly plan:")
         print("\n".join(_plan_lines(plan, session)))
+        # A failed refresh (status invalid) never becomes the current plan, so
+        # show it separately — its validation_errors say why it was rejected.
+        latest = next(
+            (p for p in store.get_plan_history(args.ticker, 20) if p.kind == "weekly_base"),
+            None,
+        )
+        if latest is not None and latest.status == PlanStatus.INVALID.value and (
+            plan is None or latest.id > plan.id
+        ):
+            print("latest weekly refresh REJECTED:")
+            print("\n".join(_plan_lines(latest, session)))
         override = store.get_latest_override(args.ticker, plan.id) if plan else None
         print("latest event override:")
         print("\n".join(_plan_lines(override, session)))

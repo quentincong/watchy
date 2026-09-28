@@ -74,6 +74,8 @@ Journal markers (all greppable):
 | `PLAN_INVALIDATED` | a plan withdrawn after its invalidation level broke (or watch-only death cross) |
 | `TRIGGERED` | a paid Fast Recheck / Triggered Risk (only once enabled) |
 | `TOKENCOST` / `GEMINICOST` | unchanged per-call cost lines |
+| `ADVISOR_TRUNCATED` | an advisor reply hit its output-token ceiling (the plan block / Take-Profit tail is what gets lost) |
+| `YFC_STALE_BAR` | yfinance-cache returned history without today's bar during the session; refetched from plain yfinance |
 
 Weekly review:
 
@@ -82,7 +84,9 @@ Weekly review:
 2. Alert volume and duplicates: reminders with vs without dedup; any ticker messaging every scan.
 3. Missed risk: compare `RISK REVIEW` / `PLAN INVALID` messages with what the market did.
 4. Stale plans: `missing_plan_rate`, `stale_plan_rate`; any `PLAN_INVALID` on Monday and why
-   (`plan show TICKER` prints validation errors).
+   (`plan show TICKER` prints a rejected latest refresh with its validation errors). A plan whose
+   invalidation level is at or above its input price is rejected — for a TRIM/SELL/WATCH plan that
+   means the model wrote an upside level where a downside one belongs.
 5. Execution-window timing: `minutes_to_leave_execution_range` — whether a reminder would have
    arrived in time.
 6. Estimated cost vs budget caps (replace the replay's placeholder per-call costs with measured

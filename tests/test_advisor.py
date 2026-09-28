@@ -900,3 +900,63 @@ class TestReachabilityInDetail:
             "ticker", "decision", "urgency", "target", "take_profit", "detail",
         }
         assert parsed["urgency"] == "HIGH"
+
+
+class TestAdvisorOutputCeiling:
+    """2026-09-28: AVGO's first automatic Weekly Full hit maxOutputTokens 3072
+    (think 2654 + out 414) and lost the tail of its WEEKLY PLAN block."""
+
+    def _gemini_reply(self, finish="STOP"):
+        return {
+            "candidates": [{"finishReason": finish,
+                            "content": {"parts": [{"text": "Decision: HOLD"}]}}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5,
+                              "thoughtsTokenCount": 3000},
+        }
+
+    def _call(self, reply):
+        import json
+        from watchy.advisor import _call_gemini
+        llm = LLMConfig(provider="gemini", model="gemini-3.5-flash", api_key="k")
+        with patch("watchy.advisor._post_json", return_value=reply) as post:
+            text = _call_gemini("prompt", llm, "AVGO", "low")
+        return text, json.loads(post.call_args[0][1])
+
+    def test_ceiling_leaves_room_over_observed_weekly_peak(self):
+        _, body = self._call(self._gemini_reply())
+        # observed peak 3068 total; keep well clear of it
+        assert body["generationConfig"]["maxOutputTokens"] >= 2 * 3072
+
+    def test_max_tokens_finish_logs_truncation(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="watchy.advisor"):
+            text, _ = self._call(self._gemini_reply("MAX_TOKENS"))
+        assert text == "Decision: HOLD"
+        assert any("ADVISOR_TRUNCATED AVGO" in r.getMessage() for r in caplog.records)
+
+    def test_normal_finish_is_quiet(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="watchy.advisor"):
+            self._call(self._gemini_reply("STOP"))
+        assert not any("ADVISOR_TRUNCATED" in r.getMessage() for r in caplog.records)
+
+    def test_openai_compatible_length_finish_logs_truncation(self, caplog):
+        from watchy.advisor import _call_openai_compatible
+        llm = LLMConfig(provider="deepseek", model="deepseek-flash", deepseek_api_key="k")
+        reply = {"choices": [{"finish_reason": "length", "message": {"content": "x"}}]}
+        with patch("watchy.advisor._post_json", return_value=reply), \
+             caplog.at_level(logging.WARNING, logger="watchy.advisor"):
+            assert _call_openai_compatible("p", llm) == "x"
+        assert any("ADVISOR_TRUNCATED" in r.getMessage() for r in caplog.records)
+
+
+class TestPlanInstructionsPrice:
+    def test_anchors_invalidation_to_the_input_price(self):
+        from watchy.advisor import _plan_instructions
+        bundle = MagicMock(current_price=249.67)
+        text = _plan_instructions(bundle)
+        assert "Current price for this plan: 249.67" in text
+        assert "Invalidation-Level must be below it" in text
+
+    def test_without_price_is_the_plain_spec(self):
+        from watchy.advisor import _plan_instructions
+        from watchy.plan import PLAN_BLOCK_INSTRUCTIONS
+        assert _plan_instructions(None) == PLAN_BLOCK_INSTRUCTIONS

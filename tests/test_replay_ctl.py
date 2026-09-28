@@ -146,6 +146,22 @@ class TestCtl:
         assert s.get_active_plan("NVDA") is None and s.get_plan_history("NVDA")
         s.close()
 
+    def test_plan_show_reports_rejected_refresh(self, db, capsys):
+        """2026-09-28: AVGO's only plan row was invalid and `plan show` printed
+        "(none)" with no hint why."""
+        from watchy.ctl import main
+        s = StateStore(db)
+        s.insert_plan(make_plan(ticker="AVGO", guidance="", dont_do=""))
+        s.insert_plan(make_plan(chase_ceiling=None))            # NVDA refresh fails too
+        s.close()
+        assert main(["--db", db, "plan", "show", "AVGO"]) == 0
+        out = capsys.readouterr().out
+        assert "latest weekly refresh REJECTED" in out and "guidance required" in out
+        assert main(["--db", db, "plan", "show", "NVDA"]) == 0
+        out = capsys.readouterr().out
+        assert "buy_zone=121.0-123.0" in out                    # still the active plan
+        assert "REJECTED" in out and "requires a buy zone and chase_ceiling" in out
+
     def test_route_and_preview_are_dry(self, db, tmp_path, capsys):
         import os
         from watchy.ctl import main

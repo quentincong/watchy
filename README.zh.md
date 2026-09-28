@@ -14,7 +14,7 @@
 ## Watchy 2.0 — 周计划 + 事件驱动监控
 
 **四种模式。**
-- **Weekly Full**：每周第一个交易日（周一；周一休市则周二）对每只票跑完整流水线（4 分析师 + 多空辩论 + 完整三方风控），cadence 和邻近门控不适用；advisor 额外输出严格格式的 `WEEKLY PLAN` 块：决策（BUY/ADD/HOLD/TRIM/SELL/WATCH —— 未持仓票上的 HOLD 记为 WATCH）、紧迫度、论点、买入区间、追高上限（chase ceiling）、失效价位/条件、减仓条件、阻力区、止盈价、指引、明确的“不要做”。计划有效到本周最后一个交易日，激活前严格校验（枚举、有限数、区间顺序、合理性、时间戳、到期）；不合格输出只存档诊断、永不可执行；刷新失败**绝不延长**上周计划（批次只发一条汇总告警）。
+- **Weekly Full**：每周第一个交易日（周一；周一休市则周二）对每只票跑完整流水线（4 分析师 + 多空辩论 + 完整三方风控），cadence 和邻近门控不适用；advisor 额外输出严格格式的 `WEEKLY PLAN` 块：决策（BUY/ADD/HOLD/TRIM/SELL/WATCH —— 未持仓票上的 HOLD 记为 WATCH）、紧迫度、论点、买入区间、追高上限（chase ceiling）、失效价位/条件、减仓条件、阻力区、止盈价、指引、明确的“不要做”。账户只做多，所以对**任何**决策失效价位都是**低于现价**的下行边界（TRIM/SELL/WATCH 的“涨过 X 就错了”这种上方价位应写进阻力区或减仓条件；失效价位 ≥ 现价的计划直接判为无效）。计划有效到本周最后一个交易日，激活前严格校验（枚举、有限数、区间顺序、合理性、时间戳、到期）；不合格输出只存档诊断、永不可执行；刷新失败**绝不延长**上周计划（批次只发一条汇总告警）。
 - **Notify Only**：Tier 1 确定性提醒，无 LLM。
 - **Fast Recheck**：只用保存的周 digest 再问一次 advisor。
 - **Triggered Risk**：市场 + 情绪 + 新闻分析师、多空辩论、简化风控、advisor。
@@ -29,7 +29,7 @@
 
 **确定性状态**（LLM 只能解释，不能改）：`ACT NOW`、`WAIT FOR LIMIT`、`DO NOT CHASE`、`RISK REVIEW`、`PLAN INVALID`、`STALE — RECHECK REQUIRED`、`INFORMATION ONLY`。每次分析后都重新取价（分析期间移动超过 `stale_move_atr` 个 ATR → STALE）；高于追高上限永远是 `DO NOT CHASE`；跌破失效是 `PLAN INVALID`/`RISK REVIEW`；数据过期、计划缺失/过期/无效、或上游 SELL/HOLD 配 advisor BUY/ADD，都绝不会显示成可执行买入；机械提醒永远不是 `ACT NOW`。
 
-**可观测性与控制。** 每次 Tier 1 评估写一条 `ROUTE {json}` 日志和 `route_log` 行；周一有 `PLAN_ACTIVE` / `PLAN_INVALID` / `WEEKLY_PLANS`。`scripts/watchy_ctl.py`：`status`、`plan show|history|expire`、只读的 `route` / `preview`（不调 LLM、不发 Telegram、不写库）、`weekly TICKER --yes`（付费强制跑）、`replay`（只读、零成本的路由回放，只统计量与时效、不评估盈利）。
+**可观测性与控制。** 每次 Tier 1 评估写一条 `ROUTE {json}` 日志和 `route_log` 行；周一有 `PLAN_ACTIVE` / `PLAN_INVALID` / `WEEKLY_PLANS`；`ADVISOR_TRUNCATED` 表示 advisor 输出撞到 token 上限，`YFC_STALE_BAR` 表示缓存历史缺今天的 bar（已改用 yfinance 直取）。日线不足 200 根的新上市票仍有价格、ATR、RSI、MACD、布林带，只缺长均线和 SEPA 阶段。`scripts/watchy_ctl.py`：`status`、`plan show|history|expire`（`show` 会同时显示被拒的最新刷新及其校验错误）、只读的 `route` / `preview`（不调 LLM、不发 Telegram、不写库）、`weekly TICKER --yes`（付费强制跑）、`replay`（只读、零成本的路由回放，只统计量与时效、不评估盈利）。
 
 > 下文描述共用机制与 1.x 每日行为，即 `tier2_schedule: daily` 下仍在运行的逻辑。
 

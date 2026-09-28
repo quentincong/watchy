@@ -1,5 +1,6 @@
 """Tests for indicators: computation and signal detection with synthetic data."""
 
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -84,6 +85,23 @@ class TestComputeIndicators:
     def test_returns_none_for_short_history(self):
         df = make_ohlcv([100.0] * 10)  # only 10 days
         assert compute_indicators("FAKE", df) is None
+
+    def test_recent_listing_gets_a_partial_bundle(self):
+        """SKHY (55 rows on 2026-09-28) must still get a price and short-window
+        indicators — a None bundle left a held position unplanned and unscanned."""
+        prices = [100.0 + np.sin(i / 5) * 5 for i in range(55)]
+        bundle = compute_indicators("SKHY", make_ohlcv(prices))
+        assert bundle is not None
+        assert bundle.current_price == pytest.approx(prices[-1])
+        assert bundle.prev_close == pytest.approx(prices[-2])
+        assert bundle.sma_50 is not None
+        assert bundle.sma_150 is None and bundle.sma_200 is None
+        assert bundle.sepa_stage is None
+        assert bundle.atr and bundle.avg_atr_20d and bundle.rsi is not None
+        assert bundle.bb_upper is not None and bundle.macd is not None
+        # no cross can fire without a 200-day average
+        signals = detect_signals(bundle, {"prev_sma_50_above_200": 0})
+        assert "golden_cross" not in signals and "death_cross" not in signals
 
     def test_computes_all_fields(self):
         """With 250 days of flat-ish data, all fields should populate."""
@@ -458,6 +476,61 @@ class TestHistoryCacheFallback:
         with pytest.raises(Exception, match="429"):
             _history_via_cache_or_direct("AAPL", yf, yfc)
         yf.Ticker.assert_not_called()
+
+
+class TestStaleSessionBar:
+    """yfinance-cache served Friday's bar an hour into Monday's session
+    (2026-09-28: NVDA 225.07 vs live 231.39)."""
+
+    SESSION_NOW = datetime(2026, 9, 28, 14, 35, tzinfo=timezone.utc)   # Mon 10:35 ET
+    PREMARKET = datetime(2026, 9, 28, 10, 2, tzinfo=timezone.utc)      # Mon 06:02 ET
+
+    def _df(self, last_day: str, close: float = 100.0):
+        idx = pd.date_range(end=last_day, periods=5, freq="B", tz="America/New_York")
+        return pd.DataFrame({"Open": close, "High": close, "Low": close,
+                             "Close": close, "Volume": 1.0}, index=idx)
+
+    def _sources(self, cached, fresh):
+        yfc = MagicMock()
+        yfc.Ticker.return_value.history.return_value = cached
+        yf = MagicMock()
+        if isinstance(fresh, Exception):
+            yf.Ticker.return_value.history.side_effect = fresh
+        else:
+            yf.Ticker.return_value.history.return_value = fresh
+        return yf, yfc
+
+    def test_missing_bar_detection(self):
+        from watchy.indicators import _missing_session_bar
+        friday = self._df("2026-09-25")
+        assert _missing_session_bar(friday, self.SESSION_NOW)
+        assert not _missing_session_bar(friday, self.PREMARKET)          # not open yet
+        assert not _missing_session_bar(self._df("2026-09-28"), self.SESSION_NOW)
+        saturday = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)
+        assert not _missing_session_bar(friday, saturday)                # no session
+
+    def test_refetches_when_cache_lacks_todays_bar(self):
+        cached, fresh = self._df("2026-09-25", 225.07), self._df("2026-09-28", 231.39)
+        yf, yfc = self._sources(cached, fresh)
+        out = _history_via_cache_or_direct("NVDA", yf, yfc, now=self.SESSION_NOW)
+        assert out is fresh
+        yf.Ticker.assert_called_once_with("NVDA")
+
+    def test_no_refetch_before_the_open(self):
+        cached = self._df("2026-09-25")
+        yf, yfc = self._sources(cached, self._df("2026-09-28"))
+        assert _history_via_cache_or_direct("NVDA", yf, yfc, now=self.PREMARKET) is cached
+        yf.Ticker.assert_not_called()
+
+    def test_failed_refetch_keeps_cached_frame(self):
+        cached = self._df("2026-09-25")
+        yf, yfc = self._sources(cached, Exception("429 Too Many Requests"))
+        assert _history_via_cache_or_direct("NVDA", yf, yfc, now=self.SESSION_NOW) is cached
+
+    def test_older_refetch_is_ignored(self):
+        cached = self._df("2026-09-25")
+        yf, yfc = self._sources(cached, self._df("2026-09-24"))
+        assert _history_via_cache_or_direct("NVDA", yf, yfc, now=self.SESSION_NOW) is cached
 
 
 # ---------------------------------------------------------------------------

@@ -140,6 +140,30 @@ def week_session_bounds(now: datetime | None = None) -> tuple[date, date]:
     return monday, friday
 
 
+def session_open_utc(day: date) -> datetime | None:
+    """Regular-session open of ``day`` in UTC, or None if ``day`` is no session.
+
+    Uses the exchange calendar (holidays excluded); falls back to 09:30 New York
+    time on weekdays.
+    """
+    cal = get_calendar()
+    if cal is not None:
+        try:
+            import pandas as pd
+
+            ts = pd.Timestamp(day)
+            if not cal.is_session(ts):
+                return None
+            return cal.session_open(ts).to_pydatetime().astimezone(timezone.utc)
+        except Exception:
+            logger.warning("session_open lookup failed; 09:30 ET fallback", exc_info=True)
+    if day.weekday() >= 5:
+        return None
+    if _NY is not None:
+        return datetime(day.year, day.month, day.day, 9, 30, tzinfo=_NY).astimezone(timezone.utc)
+    return datetime(day.year, day.month, day.day, 13, 30, tzinfo=timezone.utc)
+
+
 def session_close_utc(day: date) -> datetime:
     """Regular-session close of ``day`` in UTC.
 

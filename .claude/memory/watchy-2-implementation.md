@@ -124,3 +124,17 @@ still need prospective shadow validation — never describe them as improving re
 5. Schwab refresh token lapsed ~13:05 UTC 9/28 (re-auth was 9/21 13:34) → positions served from 10:02 cache.
 6. `watchy_ctl.py plan show` prints "(none)" for invalid-only tickers — ops doc §4 says it shows validation errors.
 Plan-quality nit: several invalidation levels sit <0.5 ATR under the zone low (GOOG 334.0 vs 334.98, KLAC).
+**Fixed same day (2026-09-28, Claude Code, user-approved):** (1) downside-only invalidation kept on purpose
+— user accepted the argument: long-only account, monitor/guards/router all read invalidation as "long case
+broken below", and an upside crossing on a TRIM plan would wrongly fire RISK REVIEW / Triggered Risk; the
+upside "wrong above X" level goes into Resistance/Trim-Condition. Prompt now states the current price;
+`validate_plan` rejects `invalidation_level >= input_price`. (2) Gemini ceiling 3072→7680
+(`_ADVICE_MAX_TOKENS` 1536 + headroom 6144) + `ADVISOR_TRUNCATED` on MAX_TOKENS/length/max_tokens.
+(3) `_history_via_cache_or_direct` refetches from plain yfinance when the yfc frame lacks today's bar after
+the open (`YFC_STALE_BAR`; `market_calendar.session_open_utc`). Unit-tested only — by ~15:00 UTC yfc had
+caught up live, so the refetch path wasn't exercised on the VPS yet; grep `YFC_STALE_BAR` next session open.
+(4) `compute_indicators` returns a partial bundle from 34 rows (`MIN_HISTORY_ROWS`); `prev_sma_50_above_200`
+stored as None without a 200-SMA. (6) `plan show` prints a rejected latest refresh. Item 5 (Schwab) the user
+re-authed themselves. This week's withdrawn/missing plans (AMZN, LUMN, CEG, AVGO, SKHY) are NOT regenerated
+by the fix — only a paid `watchy_ctl.py weekly TICKER --yes` or next Monday's batch does that.
+

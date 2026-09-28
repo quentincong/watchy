@@ -588,3 +588,15 @@ Tracked per phase as the work lands (local checkpoints on `main`).
   (`market_calendar.session_close_utc`, exchange calendar with a 16:00 ET fallback): a forced Weekly
   Full after Friday's close — or after the last session of a holiday-shortened / early-close week —
   plans the following trading week, while a run before or during that session keeps this week.
+- **First automatic Weekly Full fixes (2026-09-28):** 19/19 ran, 17 valid, but (1) three plans (AMZN
+  TRIM, LUMN/CEG WATCH) carried an *upside* invalidation level above the input price and were withdrawn
+  on the first Tier 1 scan — the block spec now says invalidation is a downside level below the current
+  price for every decision (the prompt states that price), and `validate_plan` rejects
+  `invalidation_level >= input_price`. Upside "wrong above X" levels stay out of the plan contract on
+  purpose (long-only; they belong in resistance / trim condition). (2) AVGO's reply hit Gemini's 3072
+  `maxOutputTokens` — headroom raised (ceiling 7680) and `ADVISOR_TRUNCATED` logged on any
+  provider's length stop. (3) yfinance-cache kept serving the previous session's bar well into the
+  session, so every Tier 1 scan was stale — a cached frame lacking today's bar after the open is now
+  refetched from plain yfinance (`YFC_STALE_BAR`). (4) Tickers with fewer than 200 bars (SKHY, 55)
+  had no indicator bundle, hence no plan and no Tier 1 scan — they now get a partial bundle (≥34
+  bars; long SMAs/SEPA None). `plan show` also prints a rejected latest refresh.

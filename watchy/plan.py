@@ -143,8 +143,8 @@ Thesis: <one sentence: why the position or watch remains valid>
 Buy-Zone-Low: <lowest price of the planned entry/add zone, or N/A>
 Buy-Zone-High: <highest price of the planned entry/add zone, or N/A>
 Chase-Ceiling: <price above which a new entry/add must NOT be made, or N/A>
-Invalidation-Level: <price BELOW which the thesis is broken, or N/A>
-Invalidation-Condition: <short condition, e.g. "daily close below 116", or N/A>
+Invalidation-Level: <price BELOW the current price at which the thesis is broken, or N/A>
+Invalidation-Condition: <short downside condition, e.g. "daily close below 116", or N/A>
 Trim-Condition: <explicit condition for reducing exposure, or N/A>
 Resistance-Low: <lower edge of the overhead resistance range, or N/A>
 Resistance-High: <upper edge of the overhead resistance range, or N/A>
@@ -154,7 +154,12 @@ Dont-Do: <one concrete warning, e.g. "do not chase above 125">
 {BLOCK_END}
 
 Rules: Buy-Zone-Low <= Buy-Zone-High <= Chase-Ceiling. Invalidation-Level is
-below the buy zone. For BUY or ADD the buy zone and Chase-Ceiling are required.
+below the current price and below the buy zone, for EVERY decision (including
+TRIM, SELL and WATCH): the account is long-only, so invalidation always means
+"the long case is broken on the downside". Never put an upside level there — a
+price above which a TRIM/SELL/WATCH view would be wrong belongs in
+Resistance-Low/Resistance-High or Trim-Condition.
+For BUY or ADD the buy zone and Chase-Ceiling are required.
 Give either an Invalidation-Level or an Invalidation-Condition. The plan is valid
 through the last trading session of this week only.
 """
@@ -349,6 +354,11 @@ def validate_plan(
         errors.append("buy_zone_high above chase_ceiling")
     inv = plan.invalidation_level
     if inv is not None:
+        # Long-only: invalidation is always a downside boundary. A level at or
+        # above the input price would withdraw the plan on its first scan — the
+        # model wrote a bearish view's upside "wrong above X" level instead.
+        if ref is not None and inv >= ref:
+            errors.append(f"invalidation_level {inv:g} not below input price {ref:g}")
         if lo is not None and inv >= lo:
             errors.append("invalidation_level not below buy zone")
         elif lo is None and plan.chase_ceiling is not None and inv >= plan.chase_ceiling:
