@@ -104,3 +104,23 @@ Design decisions worth remembering:
 **Why:** the user wants a lower-noise weekly-planning workflow; routing thresholds are hypotheses that
 still need prospective shadow validation — never describe them as improving returns.
 **How to apply:** read this before touching plan/route/guard code; keep §22 of the spec in sync.
+
+**🔍 First automatic Weekly Full inspected (Mon 2026-09-28, Claude Code)** — 19/19 tickers ok, 10:02→11:58 UTC
+(~6 min/ticker, done before the open); cost DeepSeek $1.22 + Gemini $0.63 = **$1.85 for the week** (V4.1 Flash
+≈$0.064/ticker). `WEEKLY_PLANS valid=17 invalid=2`. Tier 1 dedup works (2nd scan round quiet). Findings:
+1. **Plans born already invalidated (3/17: AMZN TRIM inv 256.18 @249.67, LUMN WATCH 6.39 @5.71, CEG WATCH 272
+   @263.27)** — for bearish/non-entry theses Gemini writes an *upside* "thesis wrong" level into
+   `Invalidation-Level`; `validate_plan` never checks inv < input price, so Tier 1 withdrew them on the first
+   scan (AMZN routed TRIGGERED_RISK in shadow). Needs prompt wording + validator check.
+2. **AVGO truncated**: GEMINICOST think 2654 + out 414 = 3068 ≈ `maxOutputTokens` 3072
+   (`_ADVICE_MAX_TOKENS` 1024 + `_GEMINI_THINK_HEADROOM` 2048) → "weekly plan block not terminated". Others
+   land 80–350 tokens under the cap (COHR 2992) — systemic; no finishReason check exists.
+3. **yfinance_cache serves Friday's daily bar intraday** for some tickers (14:35 UTC: NVDA 225.07 vs live 231.39,
+   VST, MRVL; at 13:30–14:00 nearly all) → `monitor.data_is_stale` flags every Tier 1 scan →
+   "STALE — RECHECK REQUIRED" on every notify. Guard is right; the feed is wrong. Latent 1.x issue (1.x Tier 1
+   silently used the stale close).
+4. **SKHY (held, +21%) has <200 rows** → `compute_indicators` returns None → no input price → plan always
+   invalid, and **no Tier 1 ROUTE at all** (unmonitored, take-profit zone-entry included).
+5. Schwab refresh token lapsed ~13:05 UTC 9/28 (re-auth was 9/21 13:34) → positions served from 10:02 cache.
+6. `watchy_ctl.py plan show` prints "(none)" for invalid-only tickers — ops doc §4 says it shows validation errors.
+Plan-quality nit: several invalidation levels sit <0.5 ATR under the zone low (GOOG 334.0 vs 334.98, KLAC).
