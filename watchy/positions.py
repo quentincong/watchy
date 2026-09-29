@@ -83,9 +83,23 @@ def render_position(pos: Position) -> str:
     return "\n".join(lines)
 
 
+def mask_account_id(account_id: str) -> str:
+    """Last four characters of a real account number, e.g. ``****4734``.
+
+    The rendered portfolio goes into the advisor prompt and so to the LLM
+    vendor (Gemini, and Qwen via OpenRouter/Alibaba); the advisor never needs
+    the brokerage account number. Labels without digits ("manual") and ids of
+    four characters or fewer are left as they are.
+    """
+    text = str(account_id)
+    if len(text) <= 4 or not any(ch.isdigit() for ch in text):
+        return text
+    return "****" + text[-4:]
+
+
 def render_portfolio(summary: AccountSummary) -> str:
     lines = [
-        f"Account: {summary.account_id}",
+        f"Account: {mask_account_id(summary.account_id)}",
         f"  Total value: ${summary.total_value:,.2f}",
     ]
     # Deliberately NOT rendering buying_power (#22): on a margin account it's the

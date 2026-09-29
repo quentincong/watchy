@@ -484,3 +484,30 @@ class TestRendering:
         assert _format_age(now - timedelta(days=3, hours=4), now) == "3d 4h old"
         assert _format_age(now - timedelta(hours=5, minutes=2), now) == "5h 2m old"
         assert _format_age(now - timedelta(minutes=10), now) == "10m old"
+
+
+class TestAccountMasking:
+    """The portfolio block reaches LLM vendors; the account number must not."""
+
+    def test_real_account_number_is_masked(self):
+        from watchy.positions import mask_account_id
+
+        assert mask_account_id("40424734") == "****4734"
+
+    def test_labels_and_short_ids_unchanged(self):
+        from watchy.positions import mask_account_id
+
+        assert mask_account_id("manual") == "manual"
+        assert mask_account_id("X1") == "X1"
+
+    def test_masking_is_idempotent(self):
+        from watchy.positions import mask_account_id
+
+        assert mask_account_id("****4734") == "****4734"
+
+    def test_render_portfolio_never_shows_the_full_number(self):
+        summary = AccountSummary(account_id="40424734", total_value=5949.48,
+                                 cash_balance=2618.55, positions=[])
+        text = render_portfolio(summary)
+        assert "40424734" not in text
+        assert "Account: ****4734" in text

@@ -289,7 +289,8 @@ each call logs a `QWENCOST` line (tokens, thinking, billed USD, the model and
 provider that answered). **Any Qwen failure** — HTTP error including exhausted
 credits, timeout, empty or truncated reply — re-runs the same prompt on the Gemini
 `llm` config and logs `ADVISOR_FALLBACK`; `advice_log` records the model that
-actually answered. Rollback: `advisor.primary: gemini`. Gemini's own usage is
+actually answered. Rollback: `advisor.primary: gemini`. The portfolio block in the
+prompt shows only the last four digits of the brokerage account number. Gemini's own usage is
 logged as `GEMINICOST`; its thinking level is per-tier (`llm.gemini_thinking_tier1`
 and `llm.gemini_thinking_tier2`, both `medium` since 2026-09-28) in `secrets.yaml`.
 

@@ -508,5 +508,6 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   `watchy/llm_shim.py`; **advisor → Qwen3.7 Max via OpenRouter** with automatic Gemini fallback (`advisor` section,
   `QWENCOST`/`ADVISOR_FALLBACK`). Qwen on RM/PM rejected (model-driven bullish shift, no accuracy evidence, PM unchanged).
   Other RM/PM options on file: majority vote on RM (noise), bake-off (MiniMax-M3 / Gemini 3.8 Flash) + forward-return
-  shadow scoring, wait for DeepSeek V4.1 Pro. Follow-ups: OpenRouter low-credit alert / auto top-up; mask the brokerage
-  account number in the advisor prompt (now reaches OpenRouter/Alibaba too).
+  shadow scoring, wait for DeepSeek V4.1 Pro. Follow-up: OpenRouter low-credit alert / auto top-up (user's call).
+  **Done 2026-09-29:** brokerage account number masked (`positions.mask_account_id`, `****4734`) in the portfolio block
+  of the advisor prompt — it had been sent in full to Gemini and would now reach OpenRouter/Alibaba.
