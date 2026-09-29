@@ -274,12 +274,24 @@ most important names were analysed first. Indicators are pre-fetched once per
 ticker (throttled) and reused by the pipeline (no double fetch).
 
 **After every analysis**, Watchy fetches the ticker's current position, calls a
-lightweight LLM (Gemini by default) to synthesize a **condensed analysis digest**
+lightweight LLM advisor to synthesize a **condensed analysis digest**
 (the decision chain + each analyst's summary tail, not the full prose) + position
-into actionable advice, and pushes a natural-language summary to Telegram. The
-advisor's own token usage is logged as a `GEMINICOST` line; its thinking level is
-per-tier (`llm.gemini_thinking_tier1` and `llm.gemini_thinking_tier2`, both `medium` since 2026-09-28)
-in `secrets.yaml`.
+into actionable advice, and pushes a natural-language summary to Telegram.
+
+**Advisor model (`advisor` in `config.yaml`).** Since 2026-09-29 the advisor is
+**Qwen3.7 Max through OpenRouter** (`advisor.primary: qwen`, key in the top-level
+`openrouter:` section of `secrets.yaml`). It was chosen on an offline replay of the
+9/28 Weekly Full (`scripts/compare_advisor_qwen.py`): weekly-plan validity 95% vs
+97% for Gemini 3.5 Flash at medium thinking, about 45% cheaper per call, about
+twice as slow. Routing is pinned to the model's own provider, reasoning uses the
+provider default budget (`advisor.qwen_reasoning_budget`, never below ~4000), and
+each call logs a `QWENCOST` line (tokens, thinking, billed USD, the model and
+provider that answered). **Any Qwen failure** — HTTP error including exhausted
+credits, timeout, empty or truncated reply — re-runs the same prompt on the Gemini
+`llm` config and logs `ADVISOR_FALLBACK`; `advice_log` records the model that
+actually answered. Rollback: `advisor.primary: gemini`. Gemini's own usage is
+logged as `GEMINICOST`; its thinking level is per-tier (`llm.gemini_thinking_tier1`
+and `llm.gemini_thinking_tier2`, both `medium` since 2026-09-28) in `secrets.yaml`.
 
 Advisor urgency is an **order deadline**, not an importance score: `HIGH` means
 an order must change today, `MEDIUM` means a decision is required within five
@@ -295,6 +307,19 @@ from 2026-09-14 04:00 UTC until V4.1 Pro launches, so retaining two model aliase
 would no longer preserve two different models. The API shape and default `high`
 thinking mode are unchanged; `TOKENCOST` accounts for the V4.1 price cut and the
 dated Pro-alias routing transition.
+
+**Structured output + deep-role effort (2026-09-29, `watchy/llm_shim.py`).** TA's
+capability table did not know the canonical `deepseek-flash` id, so it sent a
+forced `tool_choice` that DeepSeek thinking mode rejects (`400`), and Sentiment,
+Research Manager, Trader and Portfolio Manager had silently run on TA's free-text
+fallback since 9/10 (no double billing — the request was rejected before
+generation). The shim registers the canonical ids as DeepSeek thinking models,
+restoring structured output. It also lets the deep role alone (RM + PM) run at a
+different `reasoning_effort` via `pipeline.deep_reasoning_effort` in
+`config.yaml` (DeepSeek accepts `high`, its default, or `max`). It ships empty
+(= `high`): on the 2026-09-29 replay `max` tripled RM/PM thinking, left all 19 PM
+ratings unchanged and moved the RM about 0.4 notch more bullish. The vendored
+TradingAgents install is not edited; the shim is applied at runtime.
 
 The summary tail is anchored on the Markdown table every analyst prompt asks for
 at the end of its report. If that table is missing, the digest silently falls back
@@ -402,7 +427,10 @@ See the full inline comments in `config.yaml` and `secrets.example.yaml`. Key se
 | `signal_thresholds` | Detection thresholds for RSI, volume, ATR, etc. |
 | `cooldown` | Per-signal cooldown window to suppress repeat pushes |
 | `tier2_throttle_s` | Seconds to sleep between tickers in a Tier 2 daily scan (default 2.0), to smooth yfinance requests and avoid rate limits |
-| `llm` | Advisor LLM config — supports Gemini, DeepSeek, OpenAI, Anthropic |
+| `advisor` | Advisor model: `primary` (`qwen` \| `gemini`, ships `qwen`), `qwen_model` (OpenRouter slug, default `qwen/qwen3.7-max`), `qwen_reasoning_budget` (null = provider default), `fallback_to_gemini` (default true — any Qwen failure re-runs on the `llm` Gemini config) |
+| `pipeline` | `deep_reasoning_effort` for the TradingAgents deep role (Research Manager + Portfolio Manager) only; DeepSeek `high` \| `max`; ships `""` (= `high`) |
+| `llm` | Gemini advisor config (the fallback when `advisor.primary: qwen`) — also supports DeepSeek, OpenAI, Anthropic |
+| `openrouter` | `secrets.yaml` only, **top-level** section: `openrouter: {api_key: ...}`. Never put it under `llm:` (unknown `llm` keys stop the daemon) |
 | `telegram` | Telegram bot token and chat ID |
 | `schwab` | Schwab brokerage credentials (primary position source; auto-falls back to cache/manual file when unconfigured) |
 | `positions.yaml` | Manual positions file (final fallback, in `~/watchy_config/`, not committed); schema in `positions.example.yaml`. **Set `total_account_value:`** (the full account figure from your broker — equities + cash + equivalents — used directly as the concentration denominator; or use `cash:` to have Watchy add the buffer to live stock value) so the advisor judges concentration against **Total Account Value**, not the stock-only total, avoiding false "over-concentration" TRIM advice |
@@ -504,7 +532,8 @@ watchy/
     ├── take_profit.py        # take-profit gain-gate + ATR-runway logic (#28, no LLM)
     ├── digest_store.py       # persist latest analysis digest per ticker (#28 reuse)
     ├── orchestrator.py       # graduated pipeline selection per signal type
-    ├── advisor.py            # LLM synthesis: analysis digest + position → advice (GEMINICOST log)
+    ├── advisor.py            # LLM synthesis: analysis digest + position → advice (Qwen/OpenRouter + Gemini fallback; QWENCOST/GEMINICOST)
+    ├── llm_shim.py           # runtime TradingAgents tweaks: deepseek-flash capabilities + deep-role reasoning_effort
     ├── positions.py          # layered position source: Schwab → cached snapshot → manual file
     ├── schwab.py             # Schwab brokerage API client (live layer, schwabdev)
     ├── notify.py             # Telegram bot notifications

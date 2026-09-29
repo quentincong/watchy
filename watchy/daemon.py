@@ -248,6 +248,7 @@ def main(config_path: str | None = None) -> None:
     # API key from secrets.yaml, injected as env var before TA imports.
     pipeline_runner = create_tradingagents_runner(
         deepseek_api_key=config.llm.deepseek_api_key,
+        deep_reasoning_effort=config.pipeline.deep_reasoning_effort or None,
     )
 
     scheduler = build_scheduler(

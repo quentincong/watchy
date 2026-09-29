@@ -500,3 +500,13 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   caps fix): 0/38 fallbacks, ratings ~unchanged (+0.13), more stable** → the caps fix is safe to ship on its own.
   No ground truth for which RM is "right"; PM replay (fed the DeepSeek RM plan) was unaffected, the downstream effect of a
   bullish RM plan on Trader/risk debate/PM needs full pipeline runs.
+- **2026-09-29 DeepSeek `reasoning_effort: max` on RM/PM (`~/abtest_qwen/max_{rm,pm}.jsonl`, structured path).** Thinking
+  RM 2.3k→7.0k, PM 0.3k→3.9k (median); time RM 19→45 s (worst 135 s), PM 8→24 s; ≈ +$6/yr, ≈ +13 min per Weekly Full.
+  **PM ratings identical 19/19. RM +0.44 more bullish** (Overweight 11→22), rep-stability 12/19 vs 14/19. → **User chose
+  to ship with high** (`pipeline.deep_reasoning_effort: ""`); the plumbing stays for a later reason (V4.1 Pro, shadow scoring).
+- **2026-09-29 decisions shipped:** option A (deepseek-flash caps → structured output back) + option B plumbing (off) via
+  `watchy/llm_shim.py`; **advisor → Qwen3.7 Max via OpenRouter** with automatic Gemini fallback (`advisor` section,
+  `QWENCOST`/`ADVISOR_FALLBACK`). Qwen on RM/PM rejected (model-driven bullish shift, no accuracy evidence, PM unchanged).
+  Other RM/PM options on file: majority vote on RM (noise), bake-off (MiniMax-M3 / Gemini 3.8 Flash) + forward-return
+  shadow scoring, wait for DeepSeek V4.1 Pro. Follow-ups: OpenRouter low-credit alert / auto top-up; mask the brokerage
+  account number in the advisor prompt (now reaches OpenRouter/Alibaba too).

@@ -15,6 +15,7 @@ Arms:  deepseek                  production client (deepseek-flash, TA factory)
                                  (or "default" = reasoning on, no budget)
        deepseek:struct           deepseek-flash, structured via function calling
                                  with tool_choice suppressed (the caps fix)
+       deepseek:struct:max       same, reasoning_effort="max" (DeepSeek: high|max)
        method: tc   = TA default caps: function calling + forced tool_choice
                       (what a plain shim gets with no capability override)
                auto = function calling, tool_choice suppressed
@@ -136,7 +137,7 @@ def _make_llm(arm: str, rec, keys: dict):
 
         os.environ.setdefault("DEEPSEEK_API_KEY", keys["deepseek"])
         return create_llm_client("deepseek", "deepseek-flash", callbacks=[rec]).get_llm()
-    if arm == "deepseek:struct":
+    if arm in ("deepseek:struct", "deepseek:struct:max"):
         # Production DeepSeek with the capability fix: structured output via
         # function calling but no forced tool_choice (what TA's
         # _DEEPSEEK_THINKING caps do for deepseek-v4-*), so the structured path
@@ -149,9 +150,10 @@ def _make_llm(arm: str, rec, keys: dict):
                 return super().with_structured_output(
                     schema, method="function_calling", **kwargs)
 
+        extra = {"reasoning_effort": "max"} if arm.endswith(":max") else {}
         return DeepSeekStruct(model="deepseek-flash", base_url="https://api.deepseek.com",
                               api_key=keys["deepseek"], callbacks=[rec],
-                              timeout=300, max_retries=2)
+                              timeout=300, max_retries=2, **extra)
 
     parts = arm.split(":")
     budget = parts[1] if len(parts) > 1 else "default"

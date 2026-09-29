@@ -204,6 +204,26 @@ take_profit:
 # 16% of that day's bill for 3 rescans.
 max_tier1_pipelines_per_day: 1
 
+# TradingAgents deep role (Research Manager + Portfolio Manager) thinking effort.
+# DeepSeek V4.1 accepts "high" (its default) or "max"; "" sends nothing (= high).
+# The quick role (analysts, debaters, trader) is never affected. Left at high
+# after the 2026-09-29 replay: max tripled thinking but left all 19 PM ratings
+# unchanged and moved the RM ~0.4 notch more bullish (Overweights 11 -> 22) with
+# slightly worse run-to-run consistency, for ~+13 min per Weekly Full.
+pipeline:
+  deep_reasoning_effort: ""
+
+# Advisor model (writes the advice card and the weekly plan). "qwen" = Qwen3.7
+# Max through OpenRouter (key: top-level `openrouter: {api_key}` in secrets.yaml);
+# on any Qwen failure the same prompt is re-run on the Gemini `llm` config.
+# Chosen after the 2026-09-28 offline replay: plan validity 95% vs Gemini-medium
+# 97%, ~45% cheaper per call, ~2x slower. Rollback: primary: "gemini".
+advisor:
+  primary: "qwen"
+  qwen_model: "qwen/qwen3.7-max"
+  # qwen_reasoning_budget: null   # null = provider default; never below ~4000
+  fallback_to_gemini: true
+
 # Thresholds & cooldowns below are OPTIONAL — defaults are in code.
 # Uncomment any section to override.
 

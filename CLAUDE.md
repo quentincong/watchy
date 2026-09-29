@@ -75,8 +75,14 @@ this range — per-ticker time moves whenever the DeepSeek flash model is retrai
   can never yield actionable entry wording; the status is chosen by `guards.select_status`, never the LLM;
   replay and tests never call an LLM; state.db migrations stay additive (`user_version` 2 + one-time backup).
 - TradingAgents uses DeepSeek V4.1 Flash (`deepseek-flash`) for both the deep (RM/PM) and quick roles.
-  V4.1 keeps the OpenAI-compatible Chat Completions shape and default high thinking effort; no manual
-  prompt-template or thinking-parameter migration is required. The Gemini advisor remains separate.
+  `watchy/llm_shim.py` (applied at runtime, TA itself never edited) registers `deepseek-flash` as a
+  DeepSeek thinking model so structured output works (it had silently fallen back to free text since
+  9/10), and can give the deep role alone `pipeline.deep_reasoning_effort` (ships `""` = high; `max`
+  tested 2026-09-29: PM unchanged, RM ~0.4 notch more bullish → not enabled).
+- Advisor = Qwen3.7 Max via OpenRouter (`advisor.primary: qwen`; key in the TOP-LEVEL `openrouter:`
+  secrets section), automatic fallback to the Gemini `llm` config on any Qwen failure (`ADVISOR_FALLBACK`);
+  cost lines `QWENCOST` / `GEMINICOST`. Rollback = `advisor.primary: gemini`. Evidence: memory
+  `watchy-model-selection-eval` (2026-09-28 offline replays; Qwen on RM/PM rejected — see there).
 - **Why 10:02 UTC**: DeepSeek's peak/off-peak billing goes live **2026-08-16 16:00 UTC** — peak = 01:00–04:00
   & 06:00–10:00 UTC (Beijing 09:00–12:00 & 14:00–18:00) at **2× the off-peak rate**. 10:02 is the earliest
   start that clears it, with two minutes of deliberate margin because DeepSeek does not document whether

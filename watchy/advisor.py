@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+import urllib.request
 from typing import Any
 
 from watchy.config import LLMConfig, WatchyConfig
@@ -199,7 +200,7 @@ def _log_advice(
     store: Any,
     ticker: str,
     source: str,
-    llm: LLMConfig,
+    model: str,
     thinking_level: str,
     parsed: dict[str, str],
     position_source: PositionSource,
@@ -227,7 +228,7 @@ def _log_advice(
         row_id = store.log_advice(
             ticker,
             source=source,
-            model=llm.model or "",
+            model=model,
             thinking_level=thinking_level,
             decision=parsed.get("decision", ""),
             urgency=parsed.get("urgency", ""),
@@ -283,7 +284,14 @@ def get_advice(
     detail. Returns None if no LLM key is configured or the call fails.
     """
     llm = config.llm
-    if not _effective_key(llm):
+    use_qwen = config.advisor.primary == "qwen"
+    if use_qwen and not config.openrouter.api_key:
+        logger.warning(
+            "advisor.primary is qwen but secrets has no openrouter.api_key — using %s",
+            llm.provider,
+        )
+        use_qwen = False
+    if not use_qwen and not _effective_key(llm):
         field = "deepseek_api_key/api_key" if llm.provider == "deepseek" else "api_key"
         logger.info("No LLM %s configured — skipping advisor synthesis", field)
         return None
@@ -308,7 +316,22 @@ def get_advice(
     )
 
     try:
-        if llm.provider == "anthropic":
+        used_model, used_level = llm.model or "", thinking_level
+        if use_qwen:
+            try:
+                result = _call_qwen(prompt, config, ticker)
+                used_model = config.advisor.qwen_model
+                used_level = _qwen_level_label(config.advisor.qwen_reasoning_budget)
+            except Exception as exc:  # noqa: BLE001 — any Qwen failure falls back
+                if not (config.advisor.fallback_to_gemini and llm.provider == "gemini"
+                        and _effective_key(llm)):
+                    raise
+                logger.warning(
+                    "ADVISOR_FALLBACK %s qwen failed (%s: %s) — using %s",
+                    ticker, type(exc).__name__, str(exc)[:200], llm.model,
+                )
+                result = _call_gemini(prompt, llm, ticker, thinking_level)
+        elif llm.provider == "anthropic":
             result = _call_anthropic(prompt, llm)
         elif llm.provider in ("openai", "deepseek"):
             result = _call_openai_compatible(prompt, llm)
@@ -340,14 +363,14 @@ def get_advice(
             )
             parsed["take_profit"] = ""
         logger.info(
-            "Advisor for %s: decision=%s urgency=%s",
-            ticker, parsed.get("decision"), parsed.get("urgency"),
+            "Advisor for %s: decision=%s urgency=%s model=%s",
+            ticker, parsed.get("decision"), parsed.get("urgency"), used_model,
         )
         # #31: persist the decision with the book state behind it. Every call
         # site reaches the advisor through here, so this is the one place that
         # can't be forgotten when a new trigger is added.
         advice_log_id = _log_advice(
-            store, ticker, source, llm, thinking_level, parsed,
+            store, ticker, source, used_model, used_level, parsed,
             position_source, indicator_bundle, bool(take_profit_guidance),
         )
         if advice_log_id is not None:
@@ -755,6 +778,81 @@ def _call_openai_compatible(prompt: str, llm: LLMConfig) -> str:
     })
     _warn_if_truncated(data["choices"][0].get("finish_reason") == "length", llm.model)
     return data["choices"][0]["message"]["content"]
+
+
+_OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+# One retry, not the Gemini path's three: a failed Qwen call falls back to
+# Gemini, and the fallback is the better use of the time than a third attempt.
+_QWEN_HTTP_ATTEMPTS = 2
+# Reasoning shares max_tokens on OpenRouter; with no budget set, give thinking
+# the same headroom the Gemini path gets. A ceiling is not a charge.
+_QWEN_THINK_HEADROOM = _GEMINI_THINK_HEADROOM
+
+
+def _qwen_level_label(budget: int | None) -> str:
+    """advice_log thinking_level for a Qwen call: the budget, or "default"."""
+    return str(budget) if budget else "default"
+
+
+def _call_qwen(prompt: str, config: WatchyConfig, ticker: str = "") -> str:
+    """Call Qwen through OpenRouter; raise on anything the caller should not use.
+
+    Provider routing is pinned (``require_parameters`` so the reasoning setting
+    can't be silently dropped, no fallback to another host). An empty or
+    truncated reply raises: the WEEKLY PLAN block sits at the end, so a
+    truncated answer loses the plan — the Gemini fallback is the better outcome.
+    """
+    adv = config.advisor
+    reasoning: dict[str, Any] = {"enabled": True}
+    max_tokens = _ADVICE_MAX_TOKENS + _QWEN_THINK_HEADROOM
+    if adv.qwen_reasoning_budget:
+        reasoning = {"max_tokens": int(adv.qwen_reasoning_budget)}
+        max_tokens = _ADVICE_MAX_TOKENS + int(adv.qwen_reasoning_budget)
+    body = json.dumps({
+        "model": adv.qwen_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "reasoning": reasoning,
+        "provider": {"require_parameters": True, "allow_fallbacks": False},
+        "usage": {"include": True},
+    }).encode()
+    t0 = time.time()
+    data = _post_json(_OPENROUTER_URL, body, {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {config.openrouter.api_key}",
+    }, attempts=_QWEN_HTTP_ATTEMPTS)
+    secs = time.time() - t0
+    if data.get("error") and not data.get("choices"):
+        raise RuntimeError(f"OpenRouter error: {str(data['error'])[:200]}")
+    choice = data["choices"][0]
+    text = (choice.get("message") or {}).get("content") or ""
+
+    # Greppable cost line, like GEMINICOST. OpenRouter returns the billed cost.
+    try:
+        usage = data.get("usage") or {}
+        think = int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        logger.info(
+            "QWENCOST %s model=%s provider=%s in=%d cached=%d out=%d think=%d usd=%.5f secs=%.1f",
+            ticker or "-", data.get("model"), data.get("provider"),
+            int(usage.get("prompt_tokens") or 0),
+            int((usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0),
+            int(usage.get("completion_tokens") or 0) - think, think,
+            float(usage.get("cost") or 0.0), secs,
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("QWENCOST logging failed", exc_info=True)
+
+    answered = str(data.get("model") or "")
+    if answered and not answered.startswith(adv.qwen_model):
+        logger.warning(
+            "Advisor %s: requested %s but %s answered", ticker or "-", adv.qwen_model, answered,
+        )
+    if choice.get("finish_reason") == "length":
+        _warn_if_truncated(True, adv.qwen_model, ticker)
+        raise RuntimeError("Qwen reply truncated at the output ceiling")
+    if not text.strip():
+        raise RuntimeError("Qwen returned an empty reply")
+    return text
 
 
 # thinkingLevel values each model accepts (ai.google.dev/gemini-api/docs/thinking).

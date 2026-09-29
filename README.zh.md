@@ -70,7 +70,11 @@
 
 **Tier 2 批次顺序（#21）**：每日批次**先跑持仓票**（有资金敞口），再跑 watch-only 中**离目标最近**的，无目标价的票排最后——这样长批次被打断（auto-update 重启、崩溃、token 过期）时，最重要的票已经分析过。指标每票预取一次（throttled）并被流水线复用，不重复抓取。
 
-**每次分析完成后**，Watchy 获取该票的当前持仓（position），调用轻量 LLM（默认 Gemini）将**精简后的分析摘要（digest：决策链 + 各分析师的总结尾巴，非全文）**与持仓合成可执行的交易建议，推送自然语言摘要到 Telegram。顾问自身的 token 用量打成 `GEMINICOST` 行；其 thinking 档位按层设置（`secrets.yaml` 里 `llm.gemini_thinking_tier1`、`llm.gemini_thinking_tier2`，2026-09-28 起均为 medium）。
+**每次分析完成后**，Watchy 获取该票的当前持仓（position），调用轻量 LLM 顾问将**精简后的分析摘要（digest：决策链 + 各分析师的总结尾巴，非全文）**与持仓合成可执行的交易建议，推送自然语言摘要到 Telegram。
+
+**顾问模型（`config.yaml` 的 `advisor` 段）。** 2026-09-29 起顾问改用 **经 OpenRouter 调用的 Qwen3.7 Max**（`advisor.primary: qwen`，key 放在 `secrets.yaml` 顶层 `openrouter:` 段）。依据是对 9/28 Weekly Full 的离线回放（`scripts/compare_advisor_qwen.py`）：周计划有效率 95%（Gemini 3.5 Flash medium 为 97%），单次调用便宜约 45%，速度约慢一倍。路由固定到模型自己的服务商，推理用服务商默认预算（`advisor.qwen_reasoning_budget`，不要低于约 4000），每次调用打一行 `QWENCOST`（token、thinking、实际计费 USD、实际应答的模型和服务商）。**Qwen 任何失败**（HTTP 错误含余额耗尽、超时、空回复或被截断）都会用 Gemini 的 `llm` 配置重跑同一个 prompt 并打 `ADVISOR_FALLBACK`；`advice_log` 记录实际应答的模型。回滚：`advisor.primary: gemini`。Gemini 自身用量打成 `GEMINICOST` 行；其 thinking 档位按层设置（`secrets.yaml` 里 `llm.gemini_thinking_tier1`、`llm.gemini_thinking_tier2`，2026-09-28 起均为 medium）。
+
+**结构化输出 + 深度角色推理档位（2026-09-29，`watchy/llm_shim.py`）。** TradingAgents 的能力表不认识 canonical `deepseek-flash`，于是发出强制 `tool_choice`，被 DeepSeek thinking 模式以 `400` 拒绝；自 9/10 起 Sentiment、Research Manager、Trader、Portfolio Manager 一直在静默走 TA 的自由文本回退（没有重复计费——请求在生成前就被拒）。shim 把 canonical id 注册为 DeepSeek thinking 模型，恢复结构化输出；并允许只给深度角色（RM + PM）单独设 `reasoning_effort`：`config.yaml` 里的 `pipeline.deep_reasoning_effort`（DeepSeek 只接受默认的 `high` 或 `max`）。出厂为空（= `high`）：2026-09-29 回放中 `max` 让 RM/PM 思考量翻三倍，但 19 个 PM 评级全部不变，RM 偏多约 0.4 档。不改 vendored 的 TradingAgents，运行时生效。
 
 「总结尾巴」锚定在各分析师 prompt 都要求的报告末尾 Markdown 表格上。**表格若缺失，digest 会静默退回报告的开头几行（而非结论）**——所以该分支会打一条可 grep 的 `ADVISOR_TAIL_FALLBACK` 警告（含 ticker 与分析师名）。换模型后要盯这条：DeepSeek 用浮动别名且有过不公告就上新快照的先例，而末尾格式指令正是指令遵循能力下降时最先被丢掉的东西。
 
@@ -164,7 +168,10 @@ sudo systemctl enable --now watchy-update.timer
 | `signal_thresholds` | RSI、成交量、ATR 等信号检测阈值（thresholds） |
 | `cooldown` | 每种信号的冷却窗口（cooldown window），防止重复推送 |
 | `tier2_throttle_s` | Tier 2 每日扫描时票与票之间的间隔秒数（默认 2.0），平滑 yfinance 请求、避免触发限流 |
-| `llm` | 顾问 LLM 配置——支持 Gemini、DeepSeek、OpenAI、Anthropic |
+| `advisor` | 顾问模型：`primary`（`qwen` \| `gemini`，出厂 `qwen`）、`qwen_model`（OpenRouter slug，默认 `qwen/qwen3.7-max`）、`qwen_reasoning_budget`（null = 服务商默认）、`fallback_to_gemini`（默认 true——Qwen 任何失败都改用 `llm` 的 Gemini 配置重跑） |
+| `pipeline` | 只作用于 TradingAgents 深度角色（Research Manager + Portfolio Manager）的 `deep_reasoning_effort`；DeepSeek 取 `high` \| `max`；出厂 `""`（= `high`） |
+| `llm` | Gemini 顾问配置（`advisor.primary: qwen` 时作为回退）——也支持 DeepSeek、OpenAI、Anthropic |
+| `openrouter` | 只放在 `secrets.yaml`，且必须是**顶层**段：`openrouter: {api_key: ...}`。不要放进 `llm:`（`llm` 下的未知键会让守护进程启动失败） |
 | `telegram` | Telegram 机器人令牌（bot token）和聊天 ID |
 | `schwab` | Schwab 券商凭证（持仓数据主源；未配置时自动回退到缓存/手动文件） |
 | `positions.yaml` | 手动持仓文件（最终兜底，放 `~/watchy_config/`，不提交）；schema 见 `positions.example.yaml`。**建议填 `total_account_value:`**（账户总值 = 股票 + 现金 + 现金等价物，直接从券商读到的那个数，作为权威分母；或退而填 `cash:` 让 Watchy 自己加）——让顾问按 **总账户价值** 而非仅股票市值判断集中度，避免把正常持仓误判为「过度集中」而错误建议 TRIM |
@@ -257,7 +264,8 @@ watchy/
     ├── orchestrator.py       # 按信号类型的分级流水线选择
     ├── pipeline_runner.py    # TradingAgents 桥接: PipelineSpec → TradingAgentsGraph
     ├── token_tracker.py      # DeepSeek 组件级 token/成本追踪 (TOKENCOST 行, 含 thinking token 拆分, 按调用时刻套高峰/非高峰价)
-    ├── advisor.py            # LLM 合成: 分析 digest + 持仓 → 交易建议 (打 GEMINICOST 行)
+    ├── advisor.py            # LLM 合成: 分析 digest + 持仓 → 交易建议 (Qwen/OpenRouter + Gemini 回退; QWENCOST/GEMINICOST 行)
+    ├── llm_shim.py           # TradingAgents 运行时调整: deepseek-flash 能力表 + 深度角色 reasoning_effort
     ├── positions.py          # 分层持仓源: Schwab → 缓存快照 → 手动文件
     ├── schwab.py             # Schwab 券商 API 客户端 (实时层, schwabdev)
     ├── notify.py             # Telegram 机器人通知

@@ -968,3 +968,137 @@ def test_advisor_thinking_defaults_are_medium():
     assert llm.gemini_thinking_tier1 == "medium"
     assert llm.gemini_thinking_tier2 == "medium"
     assert _gemini_thinking_config("medium", "gemini-3.5-flash") == {"thinkingLevel": "medium"}
+
+
+def _qwen_config(budget=None, fallback=True, key="or-key"):
+    from watchy.config import AdvisorConfig, OpenRouterConfig
+
+    cfg = _advice_config(tp_enabled=False)
+    cfg.advisor = AdvisorConfig(primary="qwen", qwen_reasoning_budget=budget,
+                                fallback_to_gemini=fallback)
+    cfg.openrouter = OpenRouterConfig(api_key=key)
+    return cfg
+
+
+def _openrouter_reply(text=_ADVICE_WITH_TP, finish="stop", model="qwen/qwen3.7-max"):
+    return {
+        "model": model,
+        "provider": "Alibaba",
+        "choices": [{"finish_reason": finish, "message": {"content": text}}],
+        "usage": {"prompt_tokens": 7400, "completion_tokens": 3600, "cost": 0.027,
+                  "completion_tokens_details": {"reasoning_tokens": 3000}},
+    }
+
+
+class TestQwenAdvisor:
+    """advisor.primary: qwen — OpenRouter call, pinned routing, Gemini fallback."""
+
+    def test_calls_openrouter_with_pinned_routing(self):
+        import json
+
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_post_json", return_value=_openrouter_reply()) as post, \
+             patch.object(adv, "_call_gemini") as gem:
+            out = adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config())
+        assert out["decision"] == "HOLD"
+        gem.assert_not_called()
+        url, body, headers = post.call_args.args
+        assert url == "https://openrouter.ai/api/v1/chat/completions"
+        assert headers["Authorization"] == "Bearer or-key"
+        sent = json.loads(body)
+        assert sent["model"] == "qwen/qwen3.7-max"
+        assert sent["reasoning"] == {"enabled": True}
+        assert sent["provider"] == {"require_parameters": True, "allow_fallbacks": False}
+        assert post.call_args.kwargs["attempts"] == 2
+
+    def test_budget_caps_reasoning_and_sizes_max_tokens(self):
+        import json
+
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_post_json", return_value=_openrouter_reply()) as post:
+            adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config(budget=6000))
+        sent = json.loads(post.call_args.args[1])
+        assert sent["reasoning"] == {"max_tokens": 6000}
+        assert sent["max_tokens"] == adv._ADVICE_MAX_TOKENS + 6000
+
+    def test_logs_cost_line(self, caplog):
+        import watchy.advisor as adv
+
+        with caplog.at_level(logging.INFO, logger="watchy.advisor"), \
+             patch.object(adv, "_post_json", return_value=_openrouter_reply()):
+            adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config())
+        line = next(r.getMessage() for r in caplog.records if "QWENCOST" in r.getMessage())
+        assert "COHR" in line and "provider=Alibaba" in line
+        assert "think=3000" in line and "out=600" in line and "usd=0.02700" in line
+
+    def test_advice_log_records_the_model_that_answered(self):
+        import watchy.advisor as adv
+
+        store = _RecordingStore()
+        with patch.object(adv, "_post_json", return_value=_openrouter_reply()):
+            adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config(),
+                           store=store, source="weekly_full")
+        assert store.rows[0]["model"] == "qwen/qwen3.7-max"
+        assert store.rows[0]["thinking_level"] == "default"
+
+    def test_failure_falls_back_to_gemini(self, caplog):
+        import urllib.error
+
+        import watchy.advisor as adv
+
+        store = _RecordingStore()
+        err = urllib.error.HTTPError("u", 402, "Payment Required", {}, None)
+        with caplog.at_level(logging.WARNING, logger="watchy.advisor"), \
+             patch.object(adv, "_post_json", side_effect=err), \
+             patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP) as gem:
+            out = adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config(),
+                                 thinking_level="medium", store=store, source="tier2")
+        assert out["decision"] == "HOLD"
+        assert gem.call_args.args[2:] == ("COHR", "medium")
+        assert store.rows[0]["model"] == "gemini-3.5-flash"
+        assert store.rows[0]["thinking_level"] == "medium"
+        assert any("ADVISOR_FALLBACK COHR" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("reply", [
+        _openrouter_reply(finish="length"),   # plan block would be cut off
+        _openrouter_reply(text="   "),
+        {"error": {"message": "No endpoints found"}},
+    ])
+    def test_unusable_reply_falls_back(self, reply):
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_post_json", return_value=reply), \
+             patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP) as gem:
+            out = adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config())
+        gem.assert_called_once()
+        assert out["decision"] == "HOLD"
+
+    def test_no_fallback_when_disabled(self):
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_post_json", side_effect=TimeoutError("slow")), \
+             patch.object(adv, "_call_gemini") as gem:
+            out = adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config(fallback=False))
+        assert out is None
+        gem.assert_not_called()
+
+    def test_missing_openrouter_key_uses_gemini(self):
+        import watchy.advisor as adv
+
+        with patch.object(adv, "_post_json") as post, \
+             patch.object(adv, "_call_gemini", return_value=_ADVICE_WITH_TP) as gem:
+            out = adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config(key=""))
+        post.assert_not_called()
+        gem.assert_called_once()
+        assert out["decision"] == "HOLD"
+
+    def test_unexpected_answering_model_warns(self, caplog):
+        import watchy.advisor as adv
+
+        with caplog.at_level(logging.WARNING, logger="watchy.advisor"), \
+             patch.object(adv, "_post_json",
+                          return_value=_openrouter_reply(model="qwen/qwen3.8-max")):
+            adv.get_advice("COHR", {}, _AdviceSource(), _qwen_config())
+        assert any("but qwen/qwen3.8-max answered" in r.getMessage() for r in caplog.records)

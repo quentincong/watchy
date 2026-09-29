@@ -29,6 +29,7 @@ def create_tradingagents_runner(
     deep_think_llm: str = "deepseek-flash",
     quick_think_llm: str = "deepseek-flash",
     backend_url: str | None = None,
+    deep_reasoning_effort: str | None = None,
     **extra_config: Any,
 ):
     """Factory that returns a ``PipelineRunner`` wired to real TradingAgents.
@@ -41,6 +42,9 @@ def create_tradingagents_runner(
         deep_think_llm: Model for complex reasoning (Research Manager, PM).
         quick_think_llm: Model for analysts, debaters, and trader.
         backend_url: Optional custom API endpoint.
+        deep_reasoning_effort: Optional ``reasoning_effort`` for the deep role
+            only (DeepSeek: ``high`` default | ``max``). Applied through the
+            ``llm_shim`` model-id tag; the quick role is unaffected.
         **extra_config: Passed through to the TradingAgents config dict
             (e.g. max_debate_rounds, data_cache_dir, ...).
 
@@ -58,6 +62,13 @@ def create_tradingagents_runner(
     # installed (e.g. during linting or unit tests on a different machine).
     from tradingagents.default_config import DEFAULT_CONFIG
     from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    from watchy import llm_shim
+
+    llm_shim.install()
+    deep_model_id = llm_shim.tag_effort(deep_think_llm, deep_reasoning_effort)
+    if deep_model_id != deep_think_llm:
+        logger.info("TA deep role (RM/PM): %s", deep_model_id)
 
     def runner(ticker: str, spec: PipelineSpec) -> dict[str, Any]:
         """Execute the TradingAgents pipeline for *ticker* per *spec*.
@@ -83,7 +94,7 @@ def create_tradingagents_runner(
 
         config = DEFAULT_CONFIG.copy()
         config["llm_provider"] = llm_provider
-        config["deep_think_llm"] = deep_think_llm
+        config["deep_think_llm"] = deep_model_id
         config["quick_think_llm"] = quick_think_llm
         if backend_url:
             config["backend_url"] = backend_url

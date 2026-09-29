@@ -244,7 +244,10 @@ def cmd_weekly(args) -> int:
     store = StateStore(os.path.expanduser(args.db))
     try:
         notifier = TelegramNotifier(config.telegram.bot_token, config.telegram.chat_id)
-        runner = create_tradingagents_runner(deepseek_api_key=config.llm.deepseek_api_key)
+        runner = create_tradingagents_runner(
+            deepseek_api_key=config.llm.deepseek_api_key,
+            deep_reasoning_effort=config.pipeline.deep_reasoning_effort or None,
+        )
         results = run_daily_scan(
             config, store, notifier, pipeline_runner=runner,
             ticker_locks=TickerLockRegistry(), weekly=True, tickers=[args.ticker],

@@ -171,6 +171,43 @@ class TriggeredAnalysisConfig:
 
 
 @dataclass
+class PipelineConfig:
+    """TradingAgents model settings beyond the model ids themselves."""
+    # reasoning_effort for the deep role only (Research Manager + Portfolio
+    # Manager). DeepSeek V4.1 accepts "high" (its default) or "max"; "" sends
+    # nothing. The quick role (analysts, debaters, trader) is unaffected.
+    deep_reasoning_effort: str = ""
+
+
+@dataclass
+class AdvisorConfig:
+    """Which model writes the advice / weekly plan.
+
+    ``primary: gemini`` is the historical behaviour (``llm`` section). ``qwen``
+    calls Qwen through OpenRouter (key in the secrets ``openrouter`` section)
+    and, with ``fallback_to_gemini``, re-runs the same prompt on the ``llm``
+    Gemini config whenever the Qwen call fails for any reason (credits exhausted,
+    outage, timeout, empty or truncated reply), so an advice card is never lost to the
+    new vendor. Rollback = ``primary: gemini``.
+    """
+    primary: str = "gemini"
+    # OpenRouter slug. qwen/qwen3.7-max resolves to the 2026-05-20 snapshot
+    # (Alibaba is the only provider); each call logs the model that answered.
+    qwen_model: str = "qwen/qwen3.7-max"
+    # reasoning.max_tokens; None = reasoning on with the provider's default
+    # budget (measured ~3k thinking tokens, max ~4.1k, on the 9/28 replay).
+    # Don't go below ~4000: at 2000 replies degenerated on 2/19 PM calls.
+    qwen_reasoning_budget: int | None = None
+    fallback_to_gemini: bool = True
+
+
+@dataclass
+class OpenRouterConfig:
+    """Secrets-only (top-level ``openrouter:`` section of secrets.yaml)."""
+    api_key: str = ""
+
+
+@dataclass
 class TelegramConfig:
     bot_token: str = ""
     chat_id: str = ""
@@ -195,6 +232,9 @@ class WatchyConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     schwab: SchwabConfig = field(default_factory=SchwabConfig)
     take_profit: TakeProfitConfig = field(default_factory=TakeProfitConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    advisor: AdvisorConfig = field(default_factory=AdvisorConfig)
+    openrouter: OpenRouterConfig = field(default_factory=OpenRouterConfig)
     log_level: str = "INFO"
     log_file: str = "~/watchy/watchy.log"
     # Seconds to sleep between tickers in a Tier 2 daily scan, to avoid a
@@ -273,6 +313,8 @@ class WatchyConfig:
             telegram=TelegramConfig(**raw.get("telegram", {})),
             schwab=SchwabConfig(**raw.get("schwab", {})),
             take_profit=TakeProfitConfig(**raw.get("take_profit", {})),
+            pipeline=PipelineConfig(**(raw.get("pipeline") or {})),
+            advisor=_advisor(raw.get("advisor") or {}),
             log_level=raw.get("log_level", "INFO"),
             log_file=raw.get("log_file", "~/watchy/watchy.log"),
             tier2_throttle_s=raw.get("tier2_throttle_s", 2.0),
@@ -299,6 +341,15 @@ def _schedule(value: Any) -> str:
     return v
 
 
+def _advisor(raw: dict[str, Any]) -> AdvisorConfig:
+    """Parse the advisor section; an unknown primary must fail at startup."""
+    cfg = AdvisorConfig(**raw)
+    cfg.primary = str(cfg.primary).strip().lower()
+    if cfg.primary not in ("gemini", "qwen"):
+        raise ValueError(f"advisor.primary must be 'gemini' or 'qwen', got {cfg.primary!r}")
+    return cfg
+
+
 def _merge_secrets(config: WatchyConfig, secrets_path: str) -> WatchyConfig:
     """Merge secrets.yaml into config — secrets override corresponding sections."""
     if not os.path.exists(secrets_path):
@@ -313,6 +364,8 @@ def _merge_secrets(config: WatchyConfig, secrets_path: str) -> WatchyConfig:
         config.telegram = TelegramConfig(**secrets["telegram"])
     if "schwab" in secrets:
         config.schwab = SchwabConfig(**secrets["schwab"])
+    if "openrouter" in secrets:
+        config.openrouter = OpenRouterConfig(**secrets["openrouter"])
 
     return config
 
