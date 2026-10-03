@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Replay the Research Manager / Portfolio Manager on frozen Weekly Full inputs:
-DeepSeek (production) vs Qwen3.7 Max via OpenRouter at several thinking budgets.
+DeepSeek (production) vs OpenRouter models (Qwen3.7 Max, GPT-6.1 Sol, Gemini 3.8
+Flash) at several thinking budgets / effort levels.
 
 Fixtures are the reports behind the current weekly digests
 (``~/watchy/reports/*_weekly_digest.json`` -> ``result.report_path``). The RM
@@ -13,6 +14,10 @@ transcript).
 Arms:  deepseek                  production client (deepseek-flash, TA factory)
        qwen:<budget>[:<method>]  qwen/qwen3.7-max, reasoning.max_tokens=<budget>
                                  (or "default" = reasoning on, no budget)
+       sol:<effort>[:<method>]   openai/gpt-6.1-sol, reasoning.effort=<effort>
+       gemini:<effort>[:<method>] google/gemini-3.8-flash, reasoning.effort=<effort>
+                                 (any OpenRouter arm takes a budget, an effort
+                                 name, or "default" in the second field)
        deepseek:struct           deepseek-flash, structured via function calling
                                  with tool_choice suppressed (the caps fix)
        deepseek:struct:max       same, reasoning_effort="max" (DeepSeek: high|max)
@@ -60,9 +65,14 @@ logging.basicConfig(level=logging.WARNING,
 logger = logging.getLogger("rmpm-qwen-ab")
 
 OR_BASE = "https://openrouter.ai/api/v1"
-QWEN_MODEL = "qwen/qwen3.7-max"
-# OpenRouter qwen/qwen3.7-max (Alibaba), USD per 1M tokens; reasoning bills as output.
-QWEN_PRICE = {"in": 1.475, "cache": 0.295, "out": 4.425}
+# OpenRouter arms: family -> (slug, USD per 1M tokens). Reasoning bills as output.
+# The price table is only the fallback for a response without usage.cost; cache
+# rates for Sol/Gemini were not checked, so their cached input is priced as input.
+_OR_MODELS = {
+    "qwen": ("qwen/qwen3.7-max", {"in": 1.475, "cache": 0.295, "out": 4.425}),
+    "sol": ("openai/gpt-6.1-sol", {"in": 2.0, "cache": 2.0, "out": 10.0}),
+    "gemini": ("google/gemini-3.8-flash", {"in": 0.75, "cache": 0.75, "out": 3.75}),
+}
 # RM/PM answers run ~1-3k tokens; reasoning shares max_tokens on OpenRouter.
 _ANSWER_TOKENS = 8192
 _DEFAULT_REASON_CEILING = 32768
@@ -156,12 +166,18 @@ def _make_llm(arm: str, rec, keys: dict):
                               timeout=300, max_retries=2, **extra)
 
     parts = arm.split(":")
+    model = _OR_MODELS[parts[0]][0]
     budget = parts[1] if len(parts) > 1 else "default"
     method = parts[2] if len(parts) > 2 else "tc"
-    reasoning = {"enabled": True} if budget == "default" else {"max_tokens": int(budget)}
-    ceiling = _DEFAULT_REASON_CEILING if budget == "default" else int(budget)
+    if budget == "default":
+        reasoning = {"enabled": True}
+    elif budget.isdigit():
+        reasoning = {"max_tokens": int(budget)}
+    else:
+        reasoning = {"effort": budget}
+    ceiling = int(budget) if budget.isdigit() else _DEFAULT_REASON_CEILING
 
-    class QwenChat(NormalizedChatOpenAI):
+    class OpenRouterChat(NormalizedChatOpenAI):
         def with_structured_output(self, schema, *, method=None, **kwargs):
             if arm_method == "auto":
                 kwargs.setdefault("tool_choice", None)
@@ -175,8 +191,8 @@ def _make_llm(arm: str, rec, keys: dict):
             return super().with_structured_output(schema, method=method, **kwargs)
 
     arm_method = method
-    return QwenChat(
-        model=QWEN_MODEL, base_url=OR_BASE, api_key=keys["openrouter"],
+    return OpenRouterChat(
+        model=model, base_url=OR_BASE, api_key=keys["openrouter"],
         callbacks=[rec], timeout=300, max_retries=2,
         max_tokens=_ANSWER_TOKENS + ceiling,
         extra_body={
@@ -194,13 +210,14 @@ def _usd(arm: str, calls: list[dict], when: datetime) -> float:
         return sum(_cost_usd("deepseek-flash", c["in"], c["cached"], c["out"], when)
                    for c in calls)
     total = 0.0
+    price = _OR_MODELS[arm.split(":")[0]][1]
     for c in calls:
         if c.get("or_cost") is not None:
             total += float(c["or_cost"])
         else:
             miss = max(c["in"] - c["cached"], 0)
-            total += (miss * QWEN_PRICE["in"] + c["cached"] * QWEN_PRICE["cache"]
-                      + c["out"] * QWEN_PRICE["out"]) / 1e6
+            total += (miss * price["in"] + c["cached"] * price["cache"]
+                      + c["out"] * price["out"]) / 1e6
     return total
 
 
@@ -240,7 +257,12 @@ def cmd_run(args) -> int:
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     nodes = [n.strip().upper() for n in args.nodes.split(",") if n.strip()]
     keys = _keys()
-    if any(a.startswith("qwen") for a in arms) and not keys["openrouter"]:
+    unknown = [a for a in arms if not a.startswith("deepseek")
+               and a.split(":")[0] not in _OR_MODELS]
+    if unknown:
+        print(f"unknown arms: {unknown}", file=sys.stderr)
+        return 2
+    if any(not a.startswith("deepseek") for a in arms) and not keys["openrouter"]:
         print("openrouter.api_key missing from secrets.yaml", file=sys.stderr)
         return 2
     Recorder = _recorder_cls()
@@ -315,7 +337,10 @@ def cmd_run(args) -> int:
 def cmd_report(args) -> int:
     rows = [json.loads(l) for l in Path(os.path.expanduser(args.file))
             .read_text(encoding="utf-8").splitlines() if l.strip()]
-    arms = sorted({r["arm"] for r in rows}, key=lambda a: (a != "deepseek", a))
+    arms = sorted({r["arm"] for r in rows}, key=lambda a: (not a.startswith("deepseek"), a))
+    # "=ds" compares against production DeepSeek: the free-text arm when it was
+    # run, else the structured one (production since the 2026-09-29 caps fix).
+    base_arm = "deepseek" if "deepseek" in arms else "deepseek:struct"
     prod_cache: dict = {}
     for r in rows:
         r["rating"] = rating_of(r.get("text", ""))
@@ -328,7 +353,7 @@ def cmd_report(args) -> int:
         if not nr:
             continue
         base = {(r["ticker"], r["rep"]): r["rating"] for r in nr
-                if r["arm"] == "deepseek" and not r.get("error")}
+                if r["arm"] == base_arm and not r.get("error")}
         print(f"\n[{node}]")
         print(f"  {'arm':18} {'n':>3} {'err':>3} {'fb':>3} {'calls':>5} {'in':>6} {'out':>5} "
               f"{'think':>6} {'$/call':>7} {'secs':>5} {'=ds':>5} {'=prod':>5} {'faith':>6}")

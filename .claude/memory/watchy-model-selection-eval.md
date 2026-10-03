@@ -511,3 +511,27 @@ User decision under discussion: Qwen3.7 Max for advisor + TA deep role; `deepsee
   shadow scoring, wait for DeepSeek V4.1 Pro. Follow-up: OpenRouter low-credit alert / auto top-up (user's call).
   **Done 2026-09-29:** brokerage account number masked (`positions.mask_account_id`, `****4734`) in the portfolio block
   of the advisor prompt — it had been sent in full to Gemini and would now reach OpenRouter/Alibaba.
+
+## 2026-10-03 — RM/PM bake-off: GPT-6.1 Sol / Gemini 3.8 Flash vs DeepSeek (Claude Code; nothing switched)
+Trigger: user-supplied AA charts (10/3). User's stance: **performance matters, cost does not** (~$100/yr is already fine).
+Chart read: advisor — only **Gemini 4 Argon** (halluc 15%, acc 50%, LCR 79.7) beats Qwen3.7 Max (26/31/79.0), but it is
+not on OpenRouter and the charts say "Not publicly available" → replay it when reachable. Pipeline — Gemini 3.8 Flash
+(medium) and GPT-6.1 Sol (low) both LCR 84.0 = DeepSeek V4.1 Flash (max) with halluc 52% vs 96%. Terminal-Bench is irrelevant
+to Watchy. OpenRouter prices 10/3: gpt-6.1-sol $2/$10, gemini-3.8-flash $0.75/$3.75, claude-opus-5.5 $4/$20.
+- `scripts/compare_rm_pm_qwen.py` now has `sol:<effort>[:method]` and `gemini:<effort>[:method]` arms (table `_OR_MODELS`).
+  **Through OpenRouter both need `method=json`** — function calling → 404 "No endpoints… requested parameters" → free-text
+  fallback, same as Qwen.
+- Run (VPS `~/abtest_qwen/bake.jsonl`, frozen 9/28 reports): 8 tickers × RM,PM × 2 reps × {deepseek:struct, sol:low:json,
+  sol:medium:json, gemini:medium:json}; 128 calls, 0 errors, 0 fallbacks, $1.38. Tickers = stable last week (AMZN, GOOG,
+  VRT, LUMN) + unstable/model-sensitive (AVGO, NVDA, CEG, CLS).
+- **PM: identical ratings in all 64 calls, every arm = production.** With last week that is 4 model families and no PM
+  rating change → the PM rating is set by its input (trader proposal + risk debate), not by the model.
+- **RM** (score Sell −2 … Buy +2): DeepSeek mean −0.69, same rating in both reps 4/8; **Sol low +0.19 shift, 8/8 stable**,
+  ~50 thinking tokens; Sol medium +0.00, 6/8; Gemini +0.44 (more Hold/Overweight), 6/8, **price-faithfulness 83%** (DeepSeek
+  100%, Sol 94–98%) → check Gemini's numbers before trusting it. Per RM call: DeepSeek $0.0025, Gemini $0.011, Sol $0.013–0.015.
+- 1-week forward check (9/28→10/2 close, excess over SPY, n=8): corr with RM score DeepSeek +0.06, Sol low +0.59, Gemini
+  +0.36, Sol medium +0.27 — driven by CLS (+8.6%, Sol low/Gemini said Overweight). **Too small to conclude**; rescore at 2 and 4 weeks.
+- Open question that decides everything: does a different RM plan change the final PM rating once Trader + risk debate are
+  re-run? Isolated replays cannot tell (PM was always fed the saved DeepSeek RM plan). Splitting `llm_provider` for the deep
+  slot is feasible in `llm_shim.wrap_create_llm_client` (TA calls it once per slot) but not built; `token_tracker` would
+  need a price tier for the new model.
