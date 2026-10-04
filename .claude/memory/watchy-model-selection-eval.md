@@ -535,3 +535,31 @@ to Watchy. OpenRouter prices 10/3: gpt-6.1-sol $2/$10, gemini-3.8-flash $0.75/$3
   re-run? Isolated replays cannot tell (PM was always fed the saved DeepSeek RM plan). Splitting `llm_provider` for the deep
   slot is feasible in `llm_shim.wrap_create_llm_client` (TA calls it once per slot) but not built; `token_tracker` would
   need a price tier for the new model.
+
+### 2026-10-04 — full-pipeline model test, quick + deep slots (Claude Code; nothing switched)
+User picks to test: quick slot GPT-6 Luna (max) and MiniMax-M3; deep slot GPT-6.1 Sol. New script
+`scripts/compare_pipeline_models.py` (run/report): runs the real Weekly Full spec with a per-slot model id; `or:<slug>[@effort]`
+ids are routed to OpenRouter by wrapping `tg.create_llm_client` on top of `llm_shim` (this is the provider split, test-only);
+reports/logs/a COPY of the TA memory log go under `<out-dir>/<arm>/`, production state untouched. Plain tool calling works
+through OpenRouter for Luna, M3 and Sol with `require_parameters`; structured output still needs `json_schema`.
+- Run 10/3 23:55–10/4 01:55 UTC, live data, market closed, AMZN/GOOG/NVDA/CLS, one run per cell (VPS `~/abtest_qwen/pipe/`,
+  DeepSeek repeat in `pipe_rep/`). 0 errors, 0 structured fallbacks. ~$1.9 total; OpenRouter credit left ≈ $14.7.
+  | arm (quick+deep) | min/ticker | $/ticker | tables | analyst prices in tool data | PM ratings AMZN/GOOG/NVDA/CLS |
+  |---|---|---|---|---|---|
+  | ds+ds | 5.5 | 0.060 | 16/16 | 76% | Hold / Hold / Overweight / Overweight |
+  | ds+ds (repeat) | 6.1 | 0.065 | 16/16 | 67% | Overweight / Hold / Overweight / Hold |
+  | ds+sol(low) | 5.6 | 0.110 | 16/16 | 74% | Underweight / Underweight / Overweight / Underweight |
+  | luna(max)+sol | 16.2 | 0.122 | 16/16 | 58% | Underweight / Underweight / Underweight / Hold |
+  | m3+sol | 4.5 | 0.118 | 15/16 | 74% | Hold / Hold / Overweight / Underweight |
+- **Noise floor: two identical DeepSeek runs agree on the final PM rating for only 2/4 tickers (RM 1/4)**, each miss one
+  notch. Any single-run model comparison is inside that noise; ds+sol sits below BOTH DeepSeek runs on 3/4 (suggestive of a
+  bearish Sol deep slot, not established; m3+sol with the same Sol deep slot is not bearish).
+- **Luna max is out on time**: 16 min/ticker → 19 tickers ≈ 5 h > the 10:02–13:30 UTC window; ~110k reasoning tokens/ticker;
+  lowest price traceability. **M3**: fastest, same quick-slot cost as DeepSeek ($0.056 vs $0.054/ticker), no traceability gain
+  (74% vs 67–76%), 1 analyst table missing of 16. Sol deep slot ≈ +$0.05/ticker ≈ +$50/yr.
+- The "prices in tool data" metric is crude (`PRICE_RE` counts any 2–6 digit number, so derived figures count as misses);
+  use it between arms only. Parallel arms share `~/.tradingagents/cache` → a few "No columns to parse from file" indicator
+  errors while one process rewrites a cache CSV; run arms serially or give each a `data_cache_dir` next time.
+- Conclusion for now: advisor Qwen, quick slot DeepSeek, deep slot undecided (Sol = only live candidate: most repeat-stable RM
+  on frozen inputs). Next evidence: repeats per cell (≥3) and forward returns at 2 and 4 weeks on the recorded ratings; an RM
+  majority vote would attack the noise directly.
